@@ -183,7 +183,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
     lastPlaybackEndTimeRef.current = Date.now();
 
-    // 400ms acoustic guard delay to allow speaker reverberation to silence
+    // 350ms acoustic guard delay to allow speaker reverberation to silence
     setTimeout(() => {
       if (!isActiveRef.current) return;
       if (playerRef.current?.isPlaying() || pendingTTSChunksRef.current > 0 || window.speechSynthesis?.speaking) {
@@ -204,7 +204,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       vadRef.current?.resume();
       updateState('listening');
-    }, 400);
+    }, 350);
   }, [updateState]);
 
   const cleanup = useCallback(() => {
@@ -609,16 +609,16 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
       }
 
-      // Initialize VAD with robust threshold & hangover time for live natural turn-taking
+      // Initialize VAD with snappy hangover time for <1000ms response turn-taking
       const vad = new VoiceActivityDetector({
         threshold: 0.008,
-        hangoverTime: 700,
-        minSpeechDuration: 180,
+        hangoverTime: 420, // 420ms silence hangover for immediate, call-like turn taking
+        minSpeechDuration: 150,
         onSpeechStart: () => {
           if (!isActiveRef.current) return;
 
           // Check if AI is currently playing or in echo decay
-          if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 450) {
+          if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 380) {
             // Only interrupt if user explicitly speaks during playback (barge-in)
             if (playerRef.current?.isPlaying()) {
               playerRef.current.stopAudio();
@@ -654,7 +654,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           if (!isActiveRef.current) return;
 
           // Ignore if triggered during AI speech or within echo suppression window
-          if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 450) {
+          if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 380) {
             webSpeechFinalRef.current = '';
             interimSpeechRef.current = '';
             return;
@@ -664,16 +664,15 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             const sttStart = Date.now();
             let recognizedText = '';
 
-            // Check high-confidence browser Web Speech ONLY for English with >=2 words
-            const isIndic = optionsRef.current.language !== 'en-IN';
+            // 1. Ultra-fast path (<30ms): High-confidence browser Web Speech final result
+            // Supports English, Hindi, and Telugu directly in browser!
             const webFinal = webSpeechFinalRef.current.trim();
-            const webWords = webFinal.split(/\s+/).filter(Boolean);
-
             webSpeechFinalRef.current = '';
             interimSpeechRef.current = '';
             setLiveTranscript('');
 
-            if (!isIndic && webWords.length >= 2 && webFinal.length >= 5) {
+            // If final result has real content (at least 2 letters, not just punctuation)
+            if (webFinal.length >= 2 && !/^[.,?!]+$/.test(webFinal)) {
               recognizedText = webFinal;
               const sttLatency = Math.min(30, Date.now() - sttStart);
               setLatency(prev => ({ ...prev, sttLatency }));
@@ -681,7 +680,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               return;
             }
 
-            // High-Accuracy Sarvam STT (saaras:v3) with 16kHz WAV
+            // 2. High-Accuracy Sarvam STT (saaras:v3) with 16kHz WAV fallback
             if (recorderRef.current) {
               const audioBlob = await recorderRef.current.stopRecording();
 
@@ -762,11 +761,11 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         playerRef.current.onQueueDrained(transitionToListening);
       }
 
-      // Welcome greeting
+      // Welcome greeting from ABC Dental Clinic
       const greetings: Record<LanguageCode, string> = {
-        'te-IN': 'నమస్కారం! ఏబీసీ క్లినిక్‌కి స్వాగతం. నేను మీకు ఎలా సహాయపడగలను?',
-        'hi-IN': 'नमस्ते! एबीसी क्लिनिक में आपका स्वागत है. मैं आपकी क्या सहायता कर सकता हूँ?',
-        'en-IN': 'Hello! Welcome to ABC Clinic. How can I assist you today?',
+        'te-IN': 'నమస్కారం! ఏబీసీ డెంటల్ క్లినిక్‌కి స్వాగతం. నేను మీకు ఎలా సహాయపడగలను?',
+        'hi-IN': 'नमस्ते! एबीसी डेंटल क्लिनिक में आपका स्वागत है। मैं आपकी क्या सहायता कर सकता हूँ?',
+        'en-IN': 'Hello! Welcome to ABC Dental Clinic. How can I help you today?',
       };
       const initialGreeting = greetings[optionsRef.current.language] || greetings['en-IN'];
 

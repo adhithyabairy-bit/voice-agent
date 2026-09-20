@@ -60,7 +60,7 @@ export default function AgentPage() {
                 <Settings size={18} />
               </div>
               <div>
-                <p className="font-semibold text-sm">ABC Clinic Receptionist</p>
+                <p className="font-semibold text-sm">ABC Dental Clinic Receptionist</p>
                 <p className="text-xs text-[var(--muted-foreground)]">AI Voice Agent</p>
               </div>
             </div>

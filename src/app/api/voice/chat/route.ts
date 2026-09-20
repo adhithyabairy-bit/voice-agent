@@ -65,8 +65,8 @@ export async function POST(request: Request) {
         try {
           let firstChunk = true;
           for await (const chunk of streamChatResponse(messages, {
-            temperature: 0.7,
-            maxTokens: 300,
+            temperature: 0.6,
+            maxTokens: 120,
           })) {
             // Send timing info with first chunk
             if (firstChunk) {
