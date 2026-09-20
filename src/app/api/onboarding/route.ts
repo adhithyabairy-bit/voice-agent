@@ -66,6 +66,7 @@ export async function POST(req: NextRequest) {
     // 1. Create Business
     const businessPayload = {
       owner_id: userId,
+      name: business_name.trim(),
       business_name: business_name.trim(),
       business_type,
       description: description.trim(),

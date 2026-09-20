@@ -184,9 +184,13 @@ export async function updateBusinessInfo(
   }
 
   try {
+    const updatePayload: Record<string, any> = { ...data, updated_at: new Date().toISOString() };
+    if (data.business_name) {
+      updatePayload.name = data.business_name;
+    }
     const { data: updated, error } = await supabaseAdmin
       .from('businesses')
-      .update({ ...data, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', businessId)
       .select()
       .single();
