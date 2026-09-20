@@ -98,8 +98,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   /**
    * Process a user message through the AI pipeline.
    */
-  const processMessage = useCallback(async (text: string) => {
-    if (!isActiveRef.current) return;
+  const processMessage = useCallback(async (text: string, fromText = false) => {
+    if (!isActiveRef.current && !fromText) return;
 
     updateState('processing');
     addMessage('user', text);
@@ -447,7 +447,35 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
    */
   const sendTextMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
-    await processMessage(text.trim());
+
+    // Temporarily activate so processMessage and TTS playback work
+    const wasActive = isActiveRef.current;
+    isActiveRef.current = true;
+
+    // Initialize audio player if needed for TTS playback
+    if (!playerRef.current) {
+      const player = new AudioPlayer();
+      playerRef.current = player;
+      player.initialize();
+    }
+
+    try {
+      await processMessage(text.trim(), true);
+    } finally {
+      // Restore original active state if no call is running
+      if (!wasActive) {
+        // Keep active until TTS finishes, then reset
+        const checkAndReset = () => {
+          if (!playerRef.current?.isPlaying() && !window.speechSynthesis?.speaking) {
+            isActiveRef.current = wasActive;
+            setCallState('idle');
+          } else {
+            setTimeout(checkAndReset, 200);
+          }
+        };
+        setTimeout(checkAndReset, 500);
+      }
+    }
   }, [processMessage]);
 
   return {
