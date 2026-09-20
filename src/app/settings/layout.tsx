@@ -5,7 +5,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 min-w-0 overflow-auto">
-        <div className="max-w-4xl mx-auto p-6 md:p-8">
+        <div className="max-w-4xl mx-auto p-6 md:p-8 pt-16 md:pt-8">
           {children}
         </div>
       </main>

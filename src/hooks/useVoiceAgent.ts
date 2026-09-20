@@ -16,6 +16,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { AudioRecorder } from '@/lib/audio/recorder';
 import { AudioPlayer } from '@/lib/audio/player';
 import { VoiceActivityDetector } from '@/lib/audio/vad';
+import { authFetch } from '@/lib/api/auth-fetch';
 import type { CallState, LanguageCode, LatencyMetrics } from '@/types';
 
 interface VoiceAgentOptions {
@@ -34,21 +35,22 @@ interface VoiceAgentOptions {
 
 interface VoiceAgentReturn {
   callState: CallState;
-  startCall: () => Promise<void>;
-  endCall: () => Promise<void>;
-  sendTextMessage: (text: string) => Promise<void>;
-  stopSpeakingAndSend: () => void;
-  isSpeakingDetected: boolean;
   volume: number;
+  isSpeakingDetected: boolean;
   messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>;
   latency: LatencyMetrics;
   conversationId: string | null;
   error: string | null;
   isDemo: boolean;
   liveTranscript: string;
-  volumeBoost: number;
-  setVolumeBoost: (vol: number) => void;
   feedbackNotice: string | null;
+  volumeBoost: number;
+  setVolumeBoost: (val: number) => void;
+  startCall: () => Promise<void>;
+  endCall: () => Promise<void>;
+  interrupt: () => void;
+  sendTextMessage: (text: string) => Promise<void>;
+  stopSpeakingAndSend: () => void;
   callDuration: number;
 }
 
@@ -65,17 +67,16 @@ interface BrowserSpeechRecognition {
 }
 
 /**
- * Splits streamed text buffer into natural sentence/clause chunks.
- * Preserves human prosody and intonation by avoiding robotic micro-chopping.
- * Handles English, Telugu, and Hindi punctuation.
+ * Split streamed LLM buffer into speech-ready chunks for real-time TTS.
+ * Prioritizes full sentences and natural clauses (commas, semicolons) after 3+ words
+ * to slash first-audio latency while preserving fluent conversational rhythm.
  */
 function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: string } {
   const chunks: string[] = [];
   let remaining = buffer;
 
   while (remaining.length > 0) {
-    // 1. Look for full sentence terminators (. ? ! । \n)
-    // Ensures fluent, whole-sentence human speech without mid-sentence stops or unnatural breathing pauses
+    // 1. Full sentence terminators (. ? ! । \n)
     const sentenceMatch = remaining.match(/^([\s\S]*?[.?!।\n]+)(\s+|$)([\s\S]*)/);
     if (sentenceMatch) {
       const chunk = sentenceMatch[1].trim();
@@ -86,11 +87,27 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       continue;
     }
 
-    // 2. Only if an unpunctuated stream of 24+ words accumulated, split cleanly to prevent buffer buildup
+    // 2. Natural clause boundary (, ; : —) if at least 4 words have accumulated
     const words = remaining.trim().split(/\s+/);
-    if (words.length >= 24) {
-      const chunk = words.slice(0, 18).join(' ');
-      remaining = words.slice(18).join(' ');
+    if (words.length >= 4) {
+      const clauseMatch = remaining.match(/^([\s\S]*?[,;:—\u2013\u2014]+)(\s+|$)([\s\S]*)/);
+      if (clauseMatch) {
+        const chunk = clauseMatch[1].trim();
+        const clauseWords = chunk.split(/\s+/);
+        if (clauseWords.length >= 3) {
+          remaining = clauseMatch[3];
+          if (chunk.length > 0) {
+            chunks.push(chunk);
+          }
+          continue;
+        }
+      }
+    }
+
+    // 3. Prevent buffer buildup if 12+ words have accumulated without punctuation
+    if (words.length >= 12) {
+      const chunk = words.slice(0, 9).join(' ');
+      remaining = words.slice(9).join(' ');
       chunks.push(chunk);
       continue;
     }
@@ -256,7 +273,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           text: textChunk,
           language: optionsRef.current.language,
           voice: optionsRef.current.voice,
-          pace: 1.20,
+          pace: 1.38,
         }),
         signal: abortControllerRef.current?.signal,
       });
@@ -310,7 +327,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           const utterance = new SpeechSynthesisUtterance(speechText);
           utterance.lang = optionsRef.current.language.replace('-IN', '');
           utterance.volume = 1.0;
-          utterance.rate = 1.15;
+          utterance.rate = 1.25;
 
           utterance.onend = () => {
             if (isActiveRef.current && !playerRef.current?.isPlaying()) {
@@ -884,21 +901,22 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     }
 
     // Save call summary
-    if (messages.length > 0) {
+    const allMsgs = messagesRef.current.length > 0 ? messagesRef.current : messages;
+    if (allMsgs.length > 0) {
       try {
-        await fetch('/api/calls', {
+        await authFetch('/api/calls', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             callId: conversationId,
             businessId: optionsRef.current.businessId,
-            messages: messages.map(m => ({ role: m.role, content: m.content })),
+            messages: allMsgs.map(m => ({ role: m.role, content: m.content })),
             language: optionsRef.current.language,
             startTime: callStartTimeRef.current,
           }),
         });
-      } catch {
-        // Non-critical
+      } catch (err) {
+        console.warn('Call logging error:', err);
       }
     }
 
@@ -947,10 +965,25 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     }
   }, []);
 
+  /**
+   * Interrupt AI playback immediately (barge-in).
+   */
+  const interrupt = useCallback(() => {
+    playerRef.current?.stopAudio();
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    isAISpeakingRef.current = false;
+    if (callState === 'speaking') {
+      setCallState('listening');
+    }
+  }, [callState]);
+
   return {
     callState,
     startCall,
     endCall,
+    interrupt,
     sendTextMessage,
     stopSpeakingAndSend,
     isSpeakingDetected,

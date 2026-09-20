@@ -77,7 +77,7 @@ export default function AgentPage() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-6 md:p-8 animate-fade-in">
+    <div className="max-w-7xl mx-auto p-6 md:p-8 pt-16 md:pt-8 animate-fade-in">
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6">
         {/* Left Panel — Dynamic Business & Agent Configuration */}
         <div className="space-y-5">

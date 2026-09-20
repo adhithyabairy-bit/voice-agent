@@ -1,6 +1,6 @@
 import { Sidebar } from '@/components/layout/sidebar';
 
-export default function BusinessLayout({ children }: { children: React.ReactNode }) {
+export default function KnowledgeLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <Sidebar />
