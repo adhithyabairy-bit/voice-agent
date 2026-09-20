@@ -1,7 +1,9 @@
 // ============================================================
 // Audio Player
-// Plays audio through the Web Audio API with strict sequential indexing.
+// Plays audio through the Web Audio API with strict sequential indexing
+// and sample-accurate gapless buffer scheduling.
 // Features:
+// - Seamless gapless playback between chunks (no artificial breathing pauses)
 // - Guaranteed in-order indexed streaming playback (no line jumping)
 // - GainNode baseline (1.0x natural warmth)
 // - Transparent soft limiter to prevent clipping
@@ -12,17 +14,17 @@ export class AudioPlayer {
   private audioContext: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
-  private currentSource: AudioBufferSourceNode | null = null;
+  private activeSources: AudioBufferSourceNode[] = [];
   private playing = false;
   private onEndCallback: (() => void) | null = null;
   private volumeMultiplier = 1.0; // Clean 100% baseline for warm, natural, unclipped vocal realism
 
-  // Streaming audio chunk queue & indexing
-  private queue: ArrayBuffer[] = [];
-  private isProcessingQueue = false;
+  // Gapless scheduling & streaming queue
+  private queue: AudioBuffer[] = [];
+  private nextScheduledTime = 0;
   private onQueueDrainedCallback: (() => void) | null = null;
   private expectedChunkIndex = 0;
-  private pendingIndexedChunks = new Map<number, ArrayBuffer>();
+  private pendingIndexedChunks = new Map<number, AudioBuffer>();
 
   /**
    * Initialize the AudioContext and signal chain.
@@ -85,25 +87,27 @@ export class AudioPlayer {
 
   /**
    * Enqueue an audio chunk with its sequential chunk index.
-   * Guarantees chunks are strictly played in chronological order (0, 1, 2, 3...)
-   * even if async network requests resolve out of order.
+   * Pre-decodes into AudioBuffer and schedules gapless playback in exact sequence.
    */
   async enqueueIndexedAudio(audioData: ArrayBuffer, chunkIndex: number): Promise<void> {
     this.initialize();
     await this.resume();
 
-    this.pendingIndexedChunks.set(chunkIndex, audioData);
+    try {
+      const audioBuffer = await this.audioContext!.decodeAudioData(audioData.slice(0));
+      this.pendingIndexedChunks.set(chunkIndex, audioBuffer);
 
-    // Drain all consecutive ready chunks into playback queue in exact sequence
-    while (this.pendingIndexedChunks.has(this.expectedChunkIndex)) {
-      const readyChunk = this.pendingIndexedChunks.get(this.expectedChunkIndex)!;
-      this.pendingIndexedChunks.delete(this.expectedChunkIndex);
-      this.queue.push(readyChunk);
-      this.expectedChunkIndex++;
-    }
+      // Drain all consecutive ready chunks into playback queue in exact sequence
+      while (this.pendingIndexedChunks.has(this.expectedChunkIndex)) {
+        const readyChunk = this.pendingIndexedChunks.get(this.expectedChunkIndex)!;
+        this.pendingIndexedChunks.delete(this.expectedChunkIndex);
+        this.queue.push(readyChunk);
+        this.expectedChunkIndex++;
+      }
 
-    if (!this.isProcessingQueue) {
-      this.processQueue();
+      this.schedulePlayback();
+    } catch (err) {
+      console.warn('Audio decode error on indexed chunk:', err);
     }
   }
 
@@ -114,10 +118,12 @@ export class AudioPlayer {
     this.initialize();
     await this.resume();
 
-    this.queue.push(audioData);
-
-    if (!this.isProcessingQueue) {
-      this.processQueue();
+    try {
+      const audioBuffer = await this.audioContext!.decodeAudioData(audioData.slice(0));
+      this.queue.push(audioBuffer);
+      this.schedulePlayback();
+    } catch (err) {
+      console.warn('Audio decode error on raw chunk:', err);
     }
   }
 
@@ -129,49 +135,57 @@ export class AudioPlayer {
   }
 
   /**
-   * Process the next chunk in the queue.
+   * Schedule all queued chunks with sample-accurate Web Audio timing.
+   * Chunks play seamlessly back-to-back with 0ms gap.
    */
-  private async processQueue(): Promise<void> {
-    if (this.queue.length === 0) {
-      this.isProcessingQueue = false;
-      // If there are still higher indexed chunks waiting for an earlier chunk to finish fetching, do not declare drained
-      if (this.pendingIndexedChunks.size > 0) {
-        return;
+  private schedulePlayback(): void {
+    if (!this.audioContext) return;
+
+    while (this.queue.length > 0) {
+      const audioBuffer = this.queue.shift()!;
+      const source = this.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+
+      if (this.gainNode) {
+        source.connect(this.gainNode);
+      } else {
+        source.connect(this.audioContext.destination);
       }
 
-      this.playing = false;
-      if (this.onQueueDrainedCallback) {
-        const cb = this.onQueueDrainedCallback;
-        this.onQueueDrainedCallback = null;
-        cb();
-      }
-      return;
-    }
+      const now = this.audioContext.currentTime;
+      // Start at next scheduled time or right now (with 10ms lookahead for clean start)
+      const startTime = Math.max(now + 0.01, this.nextScheduledTime);
+      source.start(startTime);
+      this.nextScheduledTime = startTime + audioBuffer.duration;
+      this.playing = true;
+      this.activeSources.push(source);
 
-    this.isProcessingQueue = true;
-    const nextChunk = this.queue.shift();
-    if (!nextChunk) {
-      this.processQueue();
-      return;
-    }
+      source.onended = () => {
+        const idx = this.activeSources.indexOf(source);
+        if (idx !== -1) {
+          this.activeSources.splice(idx, 1);
+        }
 
-    try {
-      await this.playSingleBuffer(nextChunk, () => {
-        this.processQueue();
-      });
-    } catch (err) {
-      console.warn('Queue chunk playback error, continuing to next chunk:', err);
-      this.processQueue();
+        // If all scheduled sources and queues have drained, notify listener
+        if (this.activeSources.length === 0 && this.queue.length === 0 && this.pendingIndexedChunks.size === 0) {
+          this.playing = false;
+          this.nextScheduledTime = 0;
+          if (this.onQueueDrainedCallback) {
+            const cb = this.onQueueDrainedCallback;
+            this.onQueueDrainedCallback = null;
+            cb();
+          }
+        }
+      };
     }
   }
 
   /**
-   * Internal helper to play a single ArrayBuffer.
+   * Play standalone audio from an ArrayBuffer (clears existing queue).
    */
-  private async playSingleBuffer(audioData: ArrayBuffer, onEnd?: () => void): Promise<void> {
-    if (!this.audioContext) {
-      this.initialize();
-    }
+  async playAudio(audioData: ArrayBuffer, onEnd?: () => void): Promise<void> {
+    this.stopAudio();
+    this.initialize();
     await this.resume();
 
     try {
@@ -185,34 +199,21 @@ export class AudioPlayer {
         source.connect(this.audioContext!.destination);
       }
 
-      this.currentSource = source;
       this.playing = true;
-      this.onEndCallback = onEnd || null;
+      this.activeSources.push(source);
 
       source.onended = () => {
+        const idx = this.activeSources.indexOf(source);
+        if (idx !== -1) this.activeSources.splice(idx, 1);
         this.playing = false;
-        this.currentSource = null;
-        if (this.onEndCallback) {
-          const cb = this.onEndCallback;
-          this.onEndCallback = null;
-          cb();
-        }
+        onEnd?.();
       };
 
       source.start(0);
     } catch (error) {
       this.playing = false;
-      this.currentSource = null;
       throw error;
     }
-  }
-
-  /**
-   * Play standalone audio from an ArrayBuffer (clears existing queue).
-   */
-  async playAudio(audioData: ArrayBuffer, onEnd?: () => void): Promise<void> {
-    this.stopAudio();
-    return this.playSingleBuffer(audioData, onEnd);
   }
 
   /**
@@ -220,22 +221,21 @@ export class AudioPlayer {
    * Used for barge-in / interruption.
    */
   stopAudio(): void {
-    this.expectedChunkIndex = 0;
-    this.pendingIndexedChunks.clear();
-    this.queue = [];
-    this.isProcessingQueue = false;
-    this.onQueueDrainedCallback = null;
-
-    if (this.currentSource) {
+    for (const s of this.activeSources) {
       try {
-        this.currentSource.onended = null;
-        this.currentSource.stop();
+        s.onended = null;
+        s.stop();
       } catch {
         // Already stopped
       }
-      this.currentSource = null;
     }
+    this.activeSources = [];
+    this.expectedChunkIndex = 0;
+    this.pendingIndexedChunks.clear();
+    this.queue = [];
+    this.nextScheduledTime = 0;
     this.playing = false;
+    this.onQueueDrainedCallback = null;
     this.onEndCallback = null;
   }
 
@@ -243,7 +243,7 @@ export class AudioPlayer {
    * Check if audio is currently playing or queued.
    */
   isPlaying(): boolean {
-    return this.playing || this.isProcessingQueue || this.queue.length > 0 || this.pendingIndexedChunks.size > 0;
+    return this.playing || this.activeSources.length > 0 || this.queue.length > 0 || this.pendingIndexedChunks.size > 0;
   }
 
   /**
