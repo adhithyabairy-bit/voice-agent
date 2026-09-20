@@ -28,6 +28,8 @@ interface VoiceAgentReturn {
   startCall: () => Promise<void>;
   endCall: () => Promise<void>;
   sendTextMessage: (text: string) => Promise<void>;
+  stopSpeakingAndSend: () => void;
+  isSpeakingDetected: boolean;
   volume: number;
   messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>;
   latency: LatencyMetrics;
@@ -39,6 +41,7 @@ interface VoiceAgentReturn {
 export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const [callState, setCallState] = useState<CallState>('idle');
   const [volume, setVolume] = useState(0);
+  const [isSpeakingDetected, setIsSpeakingDetected] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>>([]);
   const [latency, setLatency] = useState<LatencyMetrics>({
     sttLatency: null,
@@ -209,10 +212,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       if (!isActiveRef.current) return;
 
-      // Check if TTS returned audio or demo JSON
+      // Check if TTS returned audio or demo/error
       const ttsContentType = ttsResponse.headers.get('content-type') || '';
 
-      if (ttsContentType.includes('audio')) {
+      if (ttsResponse.ok && ttsContentType.includes('audio')) {
         // Real audio — play it
         const audioData = await ttsResponse.arrayBuffer();
         
@@ -220,24 +223,52 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         vadRef.current?.pause();
 
         await playerRef.current?.playAudio(audioData, () => {
-          // Audio finished playing — resume listening
+          // Audio finished playing — resume listening and restart recorder
           if (isActiveRef.current) {
+            try {
+              recorderRef.current?.startRecording();
+            } catch {
+              // Ignore
+            }
             vadRef.current?.resume();
             updateState('listening');
           }
         });
       } else {
-        // Demo mode — use browser SpeechSynthesis
-        const demoData = await ttsResponse.json();
-        setIsDemo(true);
+        // Demo mode or TTS fallback — use browser SpeechSynthesis
+        let speechText = fullResponse;
+        try {
+          const respData = await ttsResponse.json();
+          if (respData.mode === 'demo') setIsDemo(true);
+          if (respData.text) speechText = respData.text;
+        } catch {
+          // Ignore
+        }
 
         if ('speechSynthesis' in window) {
-          const utterance = new SpeechSynthesisUtterance(demoData.text || fullResponse);
+          const utterance = new SpeechSynthesisUtterance(speechText);
           utterance.lang = optionsRef.current.language.replace('-IN', '');
           utterance.rate = 1.0;
 
           utterance.onend = () => {
             if (isActiveRef.current) {
+              try {
+                recorderRef.current?.startRecording();
+              } catch {
+                // Ignore
+              }
+              vadRef.current?.resume();
+              updateState('listening');
+            }
+          };
+
+          utterance.onerror = () => {
+            if (isActiveRef.current) {
+              try {
+                recorderRef.current?.startRecording();
+              } catch {
+                // Ignore
+              }
               vadRef.current?.resume();
               updateState('listening');
             }
@@ -246,9 +277,14 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           vadRef.current?.pause();
           speechSynthesis.speak(utterance);
         } else {
-          // No TTS at all — just return to listening after a brief pause
+          // No TTS at all — return to listening
           setTimeout(() => {
             if (isActiveRef.current) {
+              try {
+                recorderRef.current?.startRecording();
+              } catch {
+                // Ignore
+              }
               vadRef.current?.resume();
               updateState('listening');
             }
@@ -266,10 +302,15 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       if (isActiveRef.current) {
         setTimeout(() => {
           if (isActiveRef.current) {
+            try {
+              recorderRef.current?.startRecording();
+            } catch {
+              // Ignore
+            }
             updateState('listening');
             vadRef.current?.resume();
           }
-        }, 2000);
+        }, 1500);
       }
     }
   }, [messages, latency, updateState, addMessage]);
@@ -281,6 +322,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     try {
       setError(null);
       setMessages([]);
+      setIsSpeakingDetected(false);
       updateState('connecting');
 
       // Initialize audio components
@@ -309,31 +351,52 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         setConversationId(`local-${Date.now()}`);
       }
 
-      // Initialize VAD
+      // Initialize VAD with sensitive threshold & adaptive noise
       const vad = new VoiceActivityDetector({
-        threshold: 0.015,
-        hangoverTime: 800,
-        minSpeechDuration: 300,
+        threshold: 0.008,
+        hangoverTime: 1200,
+        minSpeechDuration: 150,
         onSpeechStart: () => {
           if (!isActiveRef.current) return;
+          setIsSpeakingDetected(true);
 
-          // BARGE-IN: If AI is speaking, interrupt it
+          // BARGE-IN: If AI is speaking, interrupt it immediately
           if (playerRef.current?.isPlaying()) {
             playerRef.current.stopAudio();
             abortControllerRef.current?.abort();
-            speechSynthesis?.cancel(); // Cancel browser TTS too
+            speechSynthesis?.cancel();
           }
 
-          // Start recording
-          recorderRef.current?.startRecording();
+          // Ensure recorder is active
+          if (!recorderRef.current?.isRecording()) {
+            try {
+              recorderRef.current?.startRecording();
+            } catch {
+              // Ignore
+            }
+          }
           updateState('listening');
         },
         onSpeechEnd: async () => {
+          setIsSpeakingDetected(false);
           if (!isActiveRef.current || !recorderRef.current?.isRecording()) return;
 
           try {
             // Stop recording and get audio blob
             const audioBlob = await recorderRef.current.stopRecording();
+
+            // Ignore tiny click/pop audio blobs (< 1200 bytes)
+            if (audioBlob.size < 1200) {
+              if (isActiveRef.current) {
+                try {
+                  recorderRef.current?.startRecording();
+                } catch {
+                  // Ignore
+                }
+                updateState('listening');
+              }
+              return;
+            }
 
             updateState('processing');
 
@@ -348,6 +411,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               body: formData,
             });
 
+            if (!sttResponse.ok) {
+              console.warn('STT API returned error status:', sttResponse.status);
+              if (isActiveRef.current) {
+                try {
+                  recorderRef.current?.startRecording();
+                } catch {
+                  // Ignore
+                }
+                updateState('listening');
+              }
+              return;
+            }
+
             const sttData = await sttResponse.json();
             const sttLatency = Date.now() - sttStart;
 
@@ -357,14 +433,24 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               // Process the transcribed message
               await processMessage(sttData.transcript);
             } else {
-              // No speech detected
+              // No speech transcribed
               if (isActiveRef.current) {
+                try {
+                  recorderRef.current?.startRecording();
+                } catch {
+                  // Ignore
+                }
                 updateState('listening');
               }
             }
           } catch (err: unknown) {
             console.error('Recording processing error:', err);
             if (isActiveRef.current) {
+              try {
+                recorderRef.current?.startRecording();
+              } catch {
+                // Ignore
+              }
               updateState('listening');
             }
           }
@@ -377,6 +463,13 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       vadRef.current = vad;
       vad.start(stream);
+
+      // Start recording immediately so the user's first word is never missed
+      try {
+        recorder.startRecording();
+      } catch {
+        // Ignore
+      }
 
       isActiveRef.current = true;
       callStartTimeRef.current = Date.now();
@@ -478,11 +571,22 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     }
   }, [processMessage]);
 
+  /**
+   * Manually finish speaking and trigger processing immediately.
+   */
+  const stopSpeakingAndSend = useCallback(() => {
+    if (vadRef.current) {
+      vadRef.current.forceSpeechEnd();
+    }
+  }, []);
+
   return {
     callState,
     startCall,
     endCall,
     sendTextMessage,
+    stopSpeakingAndSend,
+    isSpeakingDetected,
     volume,
     messages,
     latency,

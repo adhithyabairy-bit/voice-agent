@@ -44,26 +44,51 @@ export class AudioRecorder {
       throw new Error('Recorder not initialized. Call initialize() first.');
     }
 
+    // Stop any existing recorder instance cleanly
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try {
+        this.mediaRecorder.stop();
+      } catch {
+        // Ignore
+      }
+    }
+
     this.audioChunks = [];
 
-    // Use webm/opus if available, fall back to webm
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm';
+    // Detect best supported mime type
+    let mimeType = '';
+    const types = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+      'audio/aac',
+    ];
 
-    this.mediaRecorder = new MediaRecorder(this.stream, {
-      mimeType,
-      audioBitsPerSecond: 32000,
-    });
+    for (const t of types) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) {
+        mimeType = t;
+        break;
+      }
+    }
+
+    const options: MediaRecorderOptions = {
+      audioBitsPerSecond: 64000,
+    };
+    if (mimeType) {
+      options.mimeType = mimeType;
+    }
+
+    this.mediaRecorder = new MediaRecorder(this.stream, options);
 
     this.mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
+      if (event.data && event.data.size > 0) {
         this.audioChunks.push(event.data);
       }
     };
 
-    // Record in 250ms chunks for faster availability
-    this.mediaRecorder.start(250);
+    // Emit data every 200ms
+    this.mediaRecorder.start(200);
   }
 
   /**
@@ -72,6 +97,15 @@ export class AudioRecorder {
   stopRecording(): Promise<Blob> {
     return new Promise((resolve, reject) => {
       if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+        // If inactive but we have chunks, resolve with what we have
+        if (this.audioChunks.length > 0) {
+          const blob = new Blob(this.audioChunks, {
+            type: this.mediaRecorder?.mimeType || 'audio/webm',
+          });
+          this.audioChunks = [];
+          resolve(blob);
+          return;
+        }
         reject(new Error('Recorder is not active'));
         return;
       }
@@ -83,6 +117,15 @@ export class AudioRecorder {
         this.audioChunks = [];
         resolve(blob);
       };
+
+      // Request any buffered data before stopping
+      try {
+        if (this.mediaRecorder.state === 'recording') {
+          this.mediaRecorder.requestData();
+        }
+      } catch {
+        // Ignore
+      }
 
       this.mediaRecorder.stop();
     });

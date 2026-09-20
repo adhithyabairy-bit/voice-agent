@@ -29,13 +29,15 @@ export class VoiceActivityDetector {
   private silenceStartTime = 0;
   private active = false;
 
+  private ambientBaseline = 0.005;
+  private calibrationFrames = 0;
   private options: Required<VADOptions>;
 
   constructor(options?: VADOptions) {
     this.options = {
-      threshold: options?.threshold ?? 0.015,
-      hangoverTime: options?.hangoverTime ?? 800,
-      minSpeechDuration: options?.minSpeechDuration ?? 200,
+      threshold: options?.threshold ?? 0.008,
+      hangoverTime: options?.hangoverTime ?? 1200,
+      minSpeechDuration: options?.minSpeechDuration ?? 150,
       onSpeechStart: options?.onSpeechStart ?? (() => {}),
       onSpeechEnd: options?.onSpeechEnd ?? (() => {}),
       onVolumeChange: options?.onVolumeChange ?? (() => {}),
@@ -55,6 +57,8 @@ export class VoiceActivityDetector {
     this.sourceNode.connect(this.analyser);
 
     this.active = true;
+    this.calibrationFrames = 0;
+    this.ambientBaseline = 0.005;
     this.analyze();
   }
 
@@ -74,13 +78,25 @@ export class VoiceActivityDetector {
     }
     const rms = Math.sqrt(sumSquares / dataArray.length);
 
+    // Calibrate background noise level during first ~30 frames (~500ms)
+    if (this.calibrationFrames < 30) {
+      this.ambientBaseline = (this.ambientBaseline * this.calibrationFrames + rms) / (this.calibrationFrames + 1);
+      this.calibrationFrames++;
+    }
+
+    // Dynamic threshold: at least 0.006, but adapts to room noise floor
+    const effectiveThreshold = Math.max(
+      0.006,
+      Math.max(this.options.threshold, this.ambientBaseline * 1.5)
+    );
+
     // Normalize to 0-1 range (RMS is typically 0-0.5 for speech)
-    const normalizedVolume = Math.min(1, rms * 5);
+    const normalizedVolume = Math.min(1, rms * 6);
     this.options.onVolumeChange(normalizedVolume);
 
     const now = Date.now();
 
-    if (rms > this.options.threshold) {
+    if (rms > effectiveThreshold) {
       // Sound detected
       this.silenceStartTime = 0;
 
@@ -113,6 +129,17 @@ export class VoiceActivityDetector {
 
     this.animationFrame = requestAnimationFrame(this.analyze);
   };
+
+  /**
+   * Force speech end immediately (for manual done-speaking button).
+   */
+  forceSpeechEnd(): void {
+    if (this.isSpeaking) {
+      this.isSpeaking = false;
+      this.silenceStartTime = 0;
+      this.options.onSpeechEnd();
+    }
+  }
 
   /**
    * Update the volume threshold dynamically.

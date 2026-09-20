@@ -16,7 +16,7 @@ import { useVoiceAgent } from '@/hooks/useVoiceAgent';
 import type { LanguageCode, AgentPersonality } from '@/types';
 
 export default function AgentPage() {
-  const [language, setLanguage] = useState<LanguageCode>('te-IN');
+  const [language, setLanguage] = useState<LanguageCode>('en-IN');
   const [voice, setVoice] = useState('shubh');
   const [personality, setPersonality] = useState<AgentPersonality>('friendly');
   const [textInput, setTextInput] = useState('');
@@ -178,6 +178,31 @@ export default function AgentPage() {
               onEnd={voiceAgent.endCall}
               volume={voiceAgent.volume}
             />
+
+            {/* Live speech feedback & manual send button */}
+            {voiceAgent.callState === 'listening' && (
+              <div className="flex flex-col items-center gap-2 animate-fade-in">
+                <div
+                  className={`text-xs px-3.5 py-1.5 rounded-full font-medium transition-all ${
+                    voiceAgent.isSpeakingDetected
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
+                      : 'bg-blue-50 text-blue-700 border border-blue-200'
+                  }`}
+                >
+                  {voiceAgent.isSpeakingDetected ? '🎙️ Hearing your voice... Speak naturally' : '👂 Listening for your voice...'}
+                </div>
+                {voiceAgent.isSpeakingDetected && (
+                  <button
+                    onClick={voiceAgent.stopSpeakingAndSend}
+                    className="text-xs px-4 py-1.5 rounded-full bg-[var(--primary)] text-white font-medium shadow-sm hover:opacity-90 transition-all flex items-center gap-1.5"
+                    id="done-speaking-btn"
+                  >
+                    <span>Done Speaking</span>
+                    <Send size={12} />
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Error display */}
             {voiceAgent.error && (
