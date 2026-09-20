@@ -245,7 +245,12 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   /**
    * Helper to append an audio chunk to the player queue via /api/voice/tts.
    */
-  const synthesizeAndQueueChunk = useCallback(async (textChunk: string, isFirst = false, totalStart = 0) => {
+  const synthesizeAndQueueChunk = useCallback(async (
+    textChunk: string,
+    chunkIndex: number,
+    isFirst = false,
+    totalStart = 0
+  ) => {
     if (!textChunk.trim() || !isActiveRef.current) return;
     const chunkStart = Date.now();
     pendingTTSChunksRef.current++;
@@ -260,6 +265,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           text: textChunk,
           language: optionsRef.current.language,
           voice: optionsRef.current.voice,
+          pace: 1.20,
         }),
         signal: abortControllerRef.current?.signal,
       });
@@ -279,7 +285,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           }));
         }
         if (isActiveRef.current && playerRef.current) {
-          await playerRef.current.enqueueAudio(audioData);
+          await playerRef.current.enqueueIndexedAudio(audioData, chunkIndex);
         }
       } else {
         // Fallback: browser SpeechSynthesis
@@ -296,7 +302,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           const utterance = new SpeechSynthesisUtterance(speechText);
           utterance.lang = optionsRef.current.language.replace('-IN', '');
           utterance.volume = 1.0;
-          utterance.rate = 1.0;
+          utterance.rate = 1.15;
 
           utterance.onend = () => {
             if (isActiveRef.current && !playerRef.current?.isPlaying()) {
@@ -336,6 +342,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     optionsRef.current.onTranscript?.(text, 'user');
 
     const totalStart = Date.now();
+    playerRef.current?.resetChunkIndex();
+    let chunkIndexCounter = 0;
 
     try {
       // Cancel any existing in-flight operations
@@ -396,7 +404,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
         // Single chunk synthesize
         updateState('speaking');
-        await synthesizeAndQueueChunk(fullResponse, true, totalStart);
+        await synthesizeAndQueueChunk(fullResponse, 0, true, totalStart);
       } else {
         // Streaming NDJSON response
         const reader = chatResponse.body?.getReader();
@@ -445,7 +453,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
                     for (const chunk of chunks) {
                       const isFirst = !hasDispatchedFirstTTS;
                       hasDispatchedFirstTTS = true;
-                      synthesizeAndQueueChunk(chunk, isFirst, totalStart);
+                      const currentIndex = chunkIndexCounter++;
+                      synthesizeAndQueueChunk(chunk, currentIndex, isFirst, totalStart);
                     }
                   }
                 } else if (parsed.type === 'latency') {
@@ -465,7 +474,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             updateState('speaking');
             const isFirst = !hasDispatchedFirstTTS;
             hasDispatchedFirstTTS = true;
-            await synthesizeAndQueueChunk(streamBuffer.trim(), isFirst, totalStart);
+            const currentIndex = chunkIndexCounter++;
+            await synthesizeAndQueueChunk(streamBuffer.trim(), currentIndex, isFirst, totalStart);
           }
         }
       }
@@ -789,8 +799,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       setMessages([greetingMsg]);
       optionsRef.current.onTranscript?.(initialGreeting, 'assistant');
 
+      playerRef.current?.resetChunkIndex();
       updateState('speaking');
-      await synthesizeAndQueueChunk(initialGreeting);
+      await synthesizeAndQueueChunk(initialGreeting, 0);
 
       // Check demo mode
       try {
