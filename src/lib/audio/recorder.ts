@@ -65,6 +65,11 @@ export class AudioRecorder {
         const inputData = e.inputBuffer.getChannelData(0);
         const copy = new Float32Array(inputData);
 
+        // Crucial: Zero out output buffer so mic is NEVER echoed to speakers
+        for (let i = 0; i < e.outputBuffer.numberOfChannels; i++) {
+          e.outputBuffer.getChannelData(i).fill(0);
+        }
+
         if (!this.isRecordingState) {
           // Keep a rolling pre-speech buffer of the last ~350ms
           this.preSpeechBuffer.push(copy);
@@ -78,8 +83,11 @@ export class AudioRecorder {
       };
 
       this.source.connect(this.processor);
-      // Connect to a silent destination to keep the processor running in Chrome
-      this.processor.connect(this.audioContext.destination);
+      // Route through a zero-gain node to destination to keep processor active without audio leakage
+      const muteGain = this.audioContext.createGain();
+      muteGain.gain.setValueAtTime(0, this.audioContext.currentTime);
+      this.processor.connect(muteGain);
+      muteGain.connect(this.audioContext.destination);
     } catch (err) {
       console.warn('Web Audio capture failed, falling back to MediaRecorder:', err);
       this.setupMediaRecorderFallback();

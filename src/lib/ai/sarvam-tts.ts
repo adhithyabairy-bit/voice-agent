@@ -12,6 +12,8 @@ export interface TTSOptions {
   speaker?: string;
   pace?: number;
   model?: string;
+  temperature?: number;
+  speech_sample_rate?: number;
 }
 
 /**
@@ -45,8 +47,10 @@ export async function synthesizeSpeech(
       text: truncatedText,
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
-      speaker: options?.speaker || 'shubh',
+      speaker: options?.speaker || 'aditya',
       pace: options?.pace || 1.0,
+      temperature: options?.temperature ?? 0.6,
+      speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),
   });
 
@@ -97,8 +101,10 @@ export async function synthesizeSpeechStream(
       text: truncatedText,
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
-      speaker: options?.speaker || 'shubh',
+      speaker: options?.speaker || 'aditya',
       pace: options?.pace || 1.0,
+      temperature: options?.temperature ?? 0.6,
+      speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),
   });
 

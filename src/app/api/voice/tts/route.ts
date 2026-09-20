@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { text, language = 'te-IN', voice = 'shubh', pace = 1.0 } = body;
+    const { text, language = 'te-IN', voice = 'aditya', pace = 1.0, temperature = 0.6 } = body;
 
     if (!text) {
       return Response.json(
@@ -35,6 +35,7 @@ export async function POST(request: Request) {
       const stream = await synthesizeSpeechStream(text, language, {
         speaker: voice,
         pace,
+        temperature,
       });
 
       return new Response(stream, {
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
       const audioData = await synthesizeSpeech(text, language, {
         speaker: voice,
         pace,
+        temperature,
       });
       const latency = Date.now() - startTime;
 

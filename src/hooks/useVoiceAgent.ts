@@ -62,7 +62,8 @@ interface BrowserSpeechRecognition {
 }
 
 /**
- * Splits streamed text buffer into ready-to-speak sentence/clause chunks.
+ * Splits streamed text buffer into natural sentence/clause chunks.
+ * Preserves human prosody and intonation by avoiding robotic micro-chopping.
  * Handles English, Telugu, and Hindi punctuation.
  */
 function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: string } {
@@ -81,9 +82,10 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       continue;
     }
 
-    // 2. Look for natural clause pause (, ; :) if at least 3 words have accumulated
+    // 2. Look for natural major clause boundary (, ; :) ONLY if at least 6 words have accumulated
+    // (Preserves natural human cadence and prevents robotic 2-3 word fragment stuttering)
     const words = remaining.trim().split(/\s+/);
-    if (words.length >= 3) {
+    if (words.length >= 6) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
@@ -95,10 +97,10 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       }
     }
 
-    // 3. Fallback: if over 5 words accumulated without punctuation, split at word 4 for <500ms first audio
-    if (words.length >= 5) {
-      const chunk = words.slice(0, 4).join(' ');
-      remaining = words.slice(4).join(' ');
+    // 3. Fallback: only if an unpunctuated stream of 14+ words accumulated, split cleanly
+    if (words.length >= 14) {
+      const chunk = words.slice(0, 10).join(' ');
+      remaining = words.slice(10).join(' ');
       chunks.push(chunk);
       continue;
     }
@@ -124,7 +126,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const [error, setError] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState('');
-  const [volumeBoost, setVolumeBoostState] = useState(1.8);
+  const [volumeBoost, setVolumeBoostState] = useState(1.0); // 1.0 = clean, uncompressed natural vocal warmth
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
 
@@ -150,6 +152,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const callStartTimeRef = useRef<number>(0);
   const isActiveRef = useRef(false);
+  const isAISpeakingRef = useRef(false);
+  const lastPlaybackEndTimeRef = useRef<number>(0);
+  const pendingTTSChunksRef = useRef<number>(0);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -168,8 +173,44 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     optionsRef.current.onStateChange?.(newState);
   }, []);
 
+  /**
+   * Transition cleanly to 'listening' state with an acoustic echo guard delay.
+   * This ensures laptop speaker resonance completely decays before the mic starts listening,
+   * preventing the agent from hearing its own voice and speaking random words.
+   */
+  const transitionToListening = useCallback(() => {
+    if (!isActiveRef.current) return;
+
+    lastPlaybackEndTimeRef.current = Date.now();
+
+    // 400ms acoustic guard delay to allow speaker reverberation to silence
+    setTimeout(() => {
+      if (!isActiveRef.current) return;
+      if (playerRef.current?.isPlaying() || pendingTTSChunksRef.current > 0 || window.speechSynthesis?.speaking) {
+        return; // Audio is still playing
+      }
+
+      isAISpeakingRef.current = false;
+      webSpeechFinalRef.current = '';
+      interimSpeechRef.current = '';
+      setLiveTranscript('');
+
+      try {
+        recorderRef.current?.resetChunks();
+        recorderRef.current?.startRecording();
+      } catch {
+        // Ignore
+      }
+
+      vadRef.current?.resume();
+      updateState('listening');
+    }, 400);
+  }, [updateState]);
+
   const cleanup = useCallback(() => {
     isActiveRef.current = false;
+    isAISpeakingRef.current = false;
+    pendingTTSChunksRef.current = 0;
     abortControllerRef.current?.abort();
 
     try {
@@ -197,9 +238,15 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   /**
    * Helper to append an audio chunk to the player queue via /api/voice/tts.
    */
+  /**
+   * Helper to append an audio chunk to the player queue via /api/voice/tts.
+   */
   const synthesizeAndQueueChunk = useCallback(async (textChunk: string, isFirst = false, totalStart = 0) => {
     if (!textChunk.trim() || !isActiveRef.current) return;
     const chunkStart = Date.now();
+    pendingTTSChunksRef.current++;
+    isAISpeakingRef.current = true;
+    vadRef.current?.pause();
 
     try {
       const ttsResponse = await fetch('/api/voice/tts', {
@@ -228,8 +275,6 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           }));
         }
         if (isActiveRef.current && playerRef.current) {
-          // Pause VAD while speaking to prevent self-listening
-          vadRef.current?.pause();
           await playerRef.current.enqueueAudio(audioData);
         }
       } else {
@@ -244,7 +289,6 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
 
         if ('speechSynthesis' in window && isActiveRef.current) {
-          vadRef.current?.pause();
           const utterance = new SpeechSynthesisUtterance(speechText);
           utterance.lang = optionsRef.current.language.replace('-IN', '');
           utterance.volume = 1.0;
@@ -252,13 +296,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
           utterance.onend = () => {
             if (isActiveRef.current && !playerRef.current?.isPlaying()) {
-              try {
-                recorderRef.current?.startRecording();
-              } catch {
-                // Ignore
-              }
-              vadRef.current?.resume();
-              updateState('listening');
+              transitionToListening();
             }
           };
 
@@ -269,8 +307,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       if ((err as Error).name !== 'AbortError') {
         console.warn('TTS streaming chunk error:', err);
       }
+    } finally {
+      pendingTTSChunksRef.current = Math.max(0, pendingTTSChunksRef.current - 1);
     }
-  }, [updateState]);
+  }, [transitionToListening]);
 
   /**
    * Process a user message through streaming LLM & sentence-chunked TTS.
@@ -278,6 +318,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const processMessage = useCallback(async (text: string, fromText = false) => {
     if (!isActiveRef.current && !fromText) return;
 
+    isAISpeakingRef.current = true;
+    vadRef.current?.pause();
     updateState('processing');
     setError(null);
     setLiveTranscript('');
@@ -321,19 +363,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         throw new Error(`Chat API error: ${chatResponse.status}`);
       }
 
-      // Prepare AudioPlayer completion hook
+      // Hook up AudioPlayer completion hook
       if (playerRef.current) {
-        playerRef.current.onQueueDrained(() => {
-          if (isActiveRef.current) {
-            try {
-              recorderRef.current?.startRecording();
-            } catch {
-              // Ignore
-            }
-            vadRef.current?.resume();
-            updateState('listening');
-          }
-        });
+        playerRef.current.onQueueDrained(transitionToListening);
       }
 
       const contentType = chatResponse.headers.get('content-type') || '';
@@ -447,16 +479,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         totalResponseLatency: totalLatency,
       });
 
-      // If audio player is not playing anything (e.g. silent or demo fallback finished), revert to listening
+      // Safety check: if player is idle and no chunks are pending, transition to listening
       setTimeout(() => {
-        if (isActiveRef.current && !playerRef.current?.isPlaying() && !window.speechSynthesis?.speaking) {
-          try {
-            recorderRef.current?.startRecording();
-          } catch {
-            // Ignore
-          }
-          vadRef.current?.resume();
-          updateState('listening');
+        if (isActiveRef.current && !playerRef.current?.isPlaying() && pendingTTSChunksRef.current === 0 && !window.speechSynthesis?.speaking) {
+          transitionToListening();
         }
       }, 800);
     } catch (err: unknown) {
@@ -469,18 +495,12 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       if (isActiveRef.current) {
         setTimeout(() => {
           if (isActiveRef.current) {
-            try {
-              recorderRef.current?.startRecording();
-            } catch {
-              // Ignore
-            }
-            updateState('listening');
-            vadRef.current?.resume();
+            transitionToListening();
           }
-        }, 1500);
+        }, 1200);
       }
     }
-  }, [messages, latency, updateState, synthesizeAndQueueChunk]);
+  }, [messages, latency, updateState, synthesizeAndQueueChunk, transitionToListening]);
 
   /**
    * Start a voice call session.
@@ -521,7 +541,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         setConversationId(`local-${Date.now()}`);
       }
 
-      // Initialize Web Speech API if supported in browser for instant zero-latency recognition
+      // Initialize Web Speech API if supported in browser
       if (typeof window !== 'undefined') {
         const win = window as unknown as {
           SpeechRecognition?: new () => BrowserSpeechRecognition;
@@ -537,6 +557,13 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             recognition.lang = optionsRef.current.language;
 
             recognition.onresult = (event: unknown) => {
+              // Critical: ignore completely when AI is speaking or during echo guard window!
+              if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 450) {
+                webSpeechFinalRef.current = '';
+                interimSpeechRef.current = '';
+                return;
+              }
+
               const recEvent = event as {
                 resultIndex: number;
                 results: Array<Array<{ transcript: string }> & { isFinal: boolean }>;
@@ -582,29 +609,37 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
       }
 
-      // Initialize VAD with sensitive threshold & snappy hangover time for live natural turn-taking
+      // Initialize VAD with robust threshold & hangover time for live natural turn-taking
       const vad = new VoiceActivityDetector({
-        threshold: 0.007,
-        hangoverTime: 650,
-        minSpeechDuration: 120,
+        threshold: 0.008,
+        hangoverTime: 700,
+        minSpeechDuration: 180,
         onSpeechStart: () => {
           if (!isActiveRef.current) return;
+
+          // Check if AI is currently playing or in echo decay
+          if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 450) {
+            // Only interrupt if user explicitly speaks during playback (barge-in)
+            if (playerRef.current?.isPlaying()) {
+              playerRef.current.stopAudio();
+              abortControllerRef.current?.abort();
+              window.speechSynthesis?.cancel();
+              isAISpeakingRef.current = false;
+              pendingTTSChunksRef.current = 0;
+            } else {
+              // Acoustic echo bleed from speaker decay
+              return;
+            }
+          }
+
           setIsSpeakingDetected(true);
           setFeedbackNotice(null);
-
-          // BARGE-IN: If AI is speaking, interrupt immediately and flush queue
-          if (playerRef.current?.isPlaying()) {
-            playerRef.current.stopAudio();
-            abortControllerRef.current?.abort();
-            window.speechSynthesis?.cancel();
-          }
 
           // Discard leading silence so Sarvam STT receives only active speech
           recorderRef.current?.resetChunks();
           webSpeechFinalRef.current = '';
           interimSpeechRef.current = '';
 
-          // Ensure recorder is active
           if (!recorderRef.current?.isRecording()) {
             try {
               recorderRef.current?.startRecording();
@@ -618,32 +653,43 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           setIsSpeakingDetected(false);
           if (!isActiveRef.current) return;
 
+          // Ignore if triggered during AI speech or within echo suppression window
+          if (isAISpeakingRef.current || Date.now() - lastPlaybackEndTimeRef.current < 450) {
+            webSpeechFinalRef.current = '';
+            interimSpeechRef.current = '';
+            return;
+          }
+
           try {
             const sttStart = Date.now();
-            // Ultra-fast path: Web Speech API (final or interim captured live) ~20ms
-            let recognizedText = (webSpeechFinalRef.current || interimSpeechRef.current).trim();
+            let recognizedText = '';
+
+            // Check high-confidence browser Web Speech ONLY for English with >=2 words
+            const isIndic = optionsRef.current.language !== 'en-IN';
+            const webFinal = webSpeechFinalRef.current.trim();
+            const webWords = webFinal.split(/\s+/).filter(Boolean);
+
             webSpeechFinalRef.current = '';
             interimSpeechRef.current = '';
             setLiveTranscript('');
 
-            if (recognizedText) {
-              const sttLatency = Math.min(25, Date.now() - sttStart);
+            if (!isIndic && webWords.length >= 2 && webFinal.length >= 5) {
+              recognizedText = webFinal;
+              const sttLatency = Math.min(30, Date.now() - sttStart);
               setLatency(prev => ({ ...prev, sttLatency }));
               await processMessage(recognizedText);
               return;
             }
 
-            // Fallback path: Sarvam STT if browser recognition didn't yield text
+            // High-Accuracy Sarvam STT (saaras:v3) with 16kHz WAV
             if (recorderRef.current) {
               const audioBlob = await recorderRef.current.stopRecording();
 
-              if (audioBlob.size > 200) {
+              if (audioBlob.size > 800) {
                 updateState('processing');
 
-                const sttStart = Date.now();
                 const formData = new FormData();
-                const isWav = audioBlob.type.includes('wav');
-                formData.append('audio', audioBlob, isWav ? 'recording.wav' : 'recording.webm');
+                formData.append('audio', audioBlob, 'recording.wav');
                 formData.append('language', optionsRef.current.language);
 
                 try {
@@ -670,14 +716,12 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               }
             }
 
-            if (recognizedText) {
+            // Sanity check: must be valid speech and not just punctuation or noise
+            if (recognizedText && recognizedText.trim().length > 1 && !/^[.,?!]+$/.test(recognizedText.trim())) {
               await processMessage(recognizedText);
             } else {
-              // No clear speech detected (e.g. ambient noise or click)
-              setFeedbackNotice('Could not catch your voice. Please speak again.');
-              setTimeout(() => setFeedbackNotice(null), 3000);
-
-              if (isActiveRef.current) {
+              // Ambient noise or silence, safely revert to listening
+              if (isActiveRef.current && !isAISpeakingRef.current) {
                 try {
                   recorderRef.current?.startRecording();
                 } catch {
@@ -688,7 +732,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             }
           } catch (err: unknown) {
             console.error('Audio processing error:', err);
-            if (isActiveRef.current) {
+            if (isActiveRef.current && !isAISpeakingRef.current) {
               try {
                 recorderRef.current?.startRecording();
               } catch {
@@ -706,18 +750,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       vadRef.current = vad;
       vad.start(stream);
-
-      // Start recording immediately
-      try {
-        recorder.startRecording();
-      } catch {
-        // Ignore
-      }
+      // Immediately pause VAD while initial greeting plays so mic doesn't hear itself!
+      vad.pause();
 
       isActiveRef.current = true;
+      isAISpeakingRef.current = true;
       callStartTimeRef.current = Date.now();
 
-      // In a real live call, the AI receptionist speaks first to welcome the caller!
+      // Hook up player queue drained listener to transition cleanly to listening
+      if (playerRef.current) {
+        playerRef.current.onQueueDrained(transitionToListening);
+      }
+
+      // Welcome greeting
       const greetings: Record<LanguageCode, string> = {
         'te-IN': 'నమస్కారం! ఏబీసీ క్లినిక్‌కి స్వాగతం. నేను మీకు ఎలా సహాయపడగలను?',
         'hi-IN': 'नमस्ते! एबीसी क्लिनिक में आपका स्वागत है. मैं आपकी क्या सहायता कर सकता हूँ?',
@@ -728,21 +773,6 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       // Add greeting to transcript
       setMessages([{ role: 'assistant', content: initialGreeting, timestamp: Date.now() }]);
       optionsRef.current.onTranscript?.(initialGreeting, 'assistant');
-
-      // Hook up player queue drained listener so agent automatically listens once greeting finishes
-      if (playerRef.current) {
-        playerRef.current.onQueueDrained(() => {
-          if (isActiveRef.current) {
-            try {
-              recorderRef.current?.startRecording();
-            } catch {
-              // Ignore
-            }
-            vadRef.current?.resume();
-            updateState('listening');
-          }
-        });
-      }
 
       updateState('speaking');
       await synthesizeAndQueueChunk(initialGreeting);

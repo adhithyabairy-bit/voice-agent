@@ -17,7 +17,7 @@ import type { LanguageCode, AgentPersonality } from '@/types';
 
 export default function AgentPage() {
   const [language, setLanguage] = useState<LanguageCode>('en-IN');
-  const [voice, setVoice] = useState('shubh');
+  const [voice, setVoice] = useState('aditya');
   const [personality, setPersonality] = useState<AgentPersonality>('friendly');
   const [textInput, setTextInput] = useState('');
   const [showKeyboard, setShowKeyboard] = useState(false);
@@ -85,9 +85,13 @@ export default function AgentPage() {
               className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)] disabled:opacity-50"
               id="voice-select"
             >
-              <option value="shubh">Shubh (Male)</option>
-              <option value="ritu">Ritu (Female)</option>
-              <option value="priya">Priya (Female)</option>
+              <option value="aditya">Aditya (Male — Conversational & Natural)</option>
+              <option value="ritu">Ritu (Female — Warm & Friendly)</option>
+              <option value="priya">Priya (Female — Expressive & Clear)</option>
+              <option value="kavya">Kavya (Female — Gentle & Soothing)</option>
+              <option value="rohan">Rohan (Male — Dynamic & Engaging)</option>
+              <option value="shubh">Shubh (Male — Professional)</option>
+              <option value="neha">Neha (Female — Formal & Crisp)</option>
             </select>
           </div>
 
@@ -118,7 +122,7 @@ export default function AgentPage() {
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-[var(--muted-foreground)] flex items-center gap-1.5">
                 <Volume2 size={13} />
-                TTS Volume Boost
+                TTS Volume
               </label>
               <span className="text-xs font-mono font-medium text-[var(--primary)]">
                 {Math.round(voiceAgent.volumeBoost * 100)}%
@@ -127,17 +131,17 @@ export default function AgentPage() {
             <input
               type="range"
               min="0.5"
-              max="2.5"
-              step="0.1"
+              max="2.0"
+              step="0.05"
               value={voiceAgent.volumeBoost}
               onChange={(e) => voiceAgent.setVolumeBoost(parseFloat(e.target.value))}
               className="w-full accent-[var(--primary)] cursor-pointer h-1.5 bg-[var(--muted)] rounded-lg"
               id="volume-boost-slider"
             />
             <div className="flex justify-between text-[10px] text-[var(--muted-foreground)]">
-              <span>Normal (100%)</span>
-              <span>Amplified (180%)</span>
-              <span>Max (250%)</span>
+              <span>Soft (50%)</span>
+              <span>Natural (100%)</span>
+              <span>Boosted (200%)</span>
             </div>
           </div>
 

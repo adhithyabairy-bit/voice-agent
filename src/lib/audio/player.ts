@@ -15,7 +15,7 @@ export class AudioPlayer {
   private currentSource: AudioBufferSourceNode | null = null;
   private playing = false;
   private onEndCallback: (() => void) | null = null;
-  private volumeMultiplier = 1.8; // 180% default volume boost for crisp audio
+  private volumeMultiplier = 1.0; // Clean 100% baseline for warm, natural, unclipped vocal realism
 
   // Streaming audio chunk queue
   private queue: ArrayBuffer[] = [];
@@ -33,17 +33,18 @@ export class AudioPlayer {
     }
 
     if (!this.compressor && this.audioContext) {
+      // Gentle transparent safety limiter (prevents digital clipping without flattening vocal dynamics)
       this.compressor = this.audioContext.createDynamicsCompressor();
-      this.compressor.threshold.setValueAtTime(-24, this.audioContext.currentTime);
-      this.compressor.knee.setValueAtTime(30, this.audioContext.currentTime);
-      this.compressor.ratio.setValueAtTime(4, this.audioContext.currentTime);
-      this.compressor.attack.setValueAtTime(0.003, this.audioContext.currentTime);
-      this.compressor.release.setValueAtTime(0.15, this.audioContext.currentTime);
+      this.compressor.threshold.setValueAtTime(-2.0, this.audioContext.currentTime);
+      this.compressor.knee.setValueAtTime(12, this.audioContext.currentTime);
+      this.compressor.ratio.setValueAtTime(2.0, this.audioContext.currentTime);
+      this.compressor.attack.setValueAtTime(0.005, this.audioContext.currentTime);
+      this.compressor.release.setValueAtTime(0.1, this.audioContext.currentTime);
 
       this.gainNode = this.audioContext.createGain();
       this.gainNode.gain.setValueAtTime(this.volumeMultiplier, this.audioContext.currentTime);
 
-      // Connect: Source -> GainNode -> Compressor -> Destination
+      // Connect: Source -> GainNode -> Limiter -> Destination
       this.gainNode.connect(this.compressor);
       this.compressor.connect(this.audioContext.destination);
     }
