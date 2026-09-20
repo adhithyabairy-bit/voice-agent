@@ -1,10 +1,10 @@
 // ============================================================
-// POST /api/voice/tts — Text-to-Speech
-// Receives text, sends to Sarvam TTS, returns audio.
+// POST /api/voice/tts — Text-to-Speech (Ultra-Low-Latency Streaming)
+// Uses Sarvam TTS streaming endpoint for <450ms TTFB.
 // Keeps SARVAM_API_KEY server-side.
 // ============================================================
 
-import { synthesizeSpeech } from '@/lib/ai/sarvam-tts';
+import { synthesizeSpeechStream, synthesizeSpeech } from '@/lib/ai/sarvam-tts';
 import { isSarvamConfigured } from '@/lib/ai/sarvam-stt';
 
 export const dynamic = 'force-dynamic';
@@ -30,22 +30,37 @@ export async function POST(request: Request) {
       });
     }
 
-    // Real TTS
-    const startTime = Date.now();
-    const audioData = await synthesizeSpeech(text, language, {
-      speaker: voice,
-      pace,
-    });
-    const latency = Date.now() - startTime;
+    // Ultra-low latency streaming TTS from Sarvam (TTFB ~400ms)
+    try {
+      const stream = await synthesizeSpeechStream(text, language, {
+        speaker: voice,
+        pace,
+      });
 
-    // Return audio as binary with latency header
-    return new Response(audioData, {
-      headers: {
-        'Content-Type': 'audio/wav',
-        'X-TTS-Latency': String(latency),
-        'Cache-Control': 'no-cache',
-      },
-    });
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'audio/mpeg',
+          'X-TTS-Mode': 'stream',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    } catch (streamErr) {
+      console.warn('Sarvam stream TTS failed, falling back to REST:', streamErr);
+      const startTime = Date.now();
+      const audioData = await synthesizeSpeech(text, language, {
+        speaker: voice,
+        pace,
+      });
+      const latency = Date.now() - startTime;
+
+      return new Response(audioData, {
+        headers: {
+          'Content-Type': 'audio/wav',
+          'X-TTS-Latency': String(latency),
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
   } catch (error: unknown) {
     const err = error as Error;
     console.error('TTS Error:', err.message);

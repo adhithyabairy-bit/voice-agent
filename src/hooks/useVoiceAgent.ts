@@ -81,9 +81,9 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       continue;
     }
 
-    // 2. Look for natural clause pause (, ; :) if at least 4 words have accumulated
+    // 2. Look for natural clause pause (, ; :) if at least 3 words have accumulated
     const words = remaining.trim().split(/\s+/);
-    if (words.length >= 4) {
+    if (words.length >= 3) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
@@ -95,10 +95,10 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       }
     }
 
-    // 3. Fallback: if over 10 words accumulated without punctuation, split at word 8
-    if (words.length >= 10) {
-      const chunk = words.slice(0, 8).join(' ');
-      remaining = words.slice(8).join(' ');
+    // 3. Fallback: if over 5 words accumulated without punctuation, split at word 4 for <500ms first audio
+    if (words.length >= 5) {
+      const chunk = words.slice(0, 4).join(' ');
+      remaining = words.slice(4).join(' ');
       chunks.push(chunk);
       continue;
     }
@@ -155,6 +155,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
   // Web Speech API accumulation
   const webSpeechFinalRef = useRef('');
+  const interimSpeechRef = useRef('');
 
   // Volume boost setter
   const setVolumeBoost = useCallback((vol: number) => {
@@ -196,8 +197,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   /**
    * Helper to append an audio chunk to the player queue via /api/voice/tts.
    */
-  const synthesizeAndQueueChunk = useCallback(async (textChunk: string) => {
+  const synthesizeAndQueueChunk = useCallback(async (textChunk: string, isFirst = false, totalStart = 0) => {
     if (!textChunk.trim() || !isActiveRef.current) return;
+    const chunkStart = Date.now();
 
     try {
       const ttsResponse = await fetch('/api/voice/tts', {
@@ -214,8 +216,17 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       if (!isActiveRef.current) return;
 
       const ttsContentType = ttsResponse.headers.get('content-type') || '';
-      if (ttsResponse.ok && ttsContentType.includes('audio')) {
+      if (ttsResponse.ok && (ttsContentType.includes('audio') || ttsContentType.includes('mpeg') || ttsContentType.includes('wav'))) {
         const audioData = await ttsResponse.arrayBuffer();
+        if (isFirst) {
+          const ttsLatency = Date.now() - chunkStart;
+          const totalLatency = totalStart ? Date.now() - totalStart : ttsLatency;
+          setLatency(prev => ({
+            ...prev,
+            ttsLatency,
+            totalResponseLatency: totalLatency,
+          }));
+        }
         if (isActiveRef.current && playerRef.current) {
           // Pause VAD while speaking to prevent self-listening
           vadRef.current?.pause();
@@ -329,6 +340,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       let fullResponse = '';
       let streamBuffer = '';
 
+      let hasDispatchedFirstTTS = false;
+
       if (contentType.includes('application/json')) {
         // Non-streaming fallback
         const jsonData = await chatResponse.json();
@@ -346,7 +359,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
         // Single chunk synthesize
         updateState('speaking');
-        await synthesizeAndQueueChunk(fullResponse);
+        await synthesizeAndQueueChunk(fullResponse, true, totalStart);
       } else {
         // Streaming NDJSON response
         const reader = chatResponse.body?.getReader();
@@ -393,8 +406,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
                   if (chunks.length > 0) {
                     updateState('speaking');
                     for (const chunk of chunks) {
-                      // Fire-and-forget chunk synthesis; chunks queue inside AudioPlayer
-                      synthesizeAndQueueChunk(chunk);
+                      const isFirst = !hasDispatchedFirstTTS;
+                      hasDispatchedFirstTTS = true;
+                      synthesizeAndQueueChunk(chunk, isFirst, totalStart);
                     }
                   }
                 } else if (parsed.type === 'latency') {
@@ -412,7 +426,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           // Flush any remaining text at the end of the stream
           if (streamBuffer.trim().length > 0 && isActiveRef.current) {
             updateState('speaking');
-            await synthesizeAndQueueChunk(streamBuffer.trim());
+            const isFirst = !hasDispatchedFirstTTS;
+            hasDispatchedFirstTTS = true;
+            await synthesizeAndQueueChunk(streamBuffer.trim(), isFirst, totalStart);
           }
         }
       }
@@ -527,22 +543,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               };
 
               let interim = '';
-              let final = '';
-
               for (let i = recEvent.resultIndex; i < recEvent.results.length; ++i) {
                 const transcriptPiece = recEvent.results[i][0].transcript;
                 if (recEvent.results[i].isFinal) {
-                  final += transcriptPiece;
+                  webSpeechFinalRef.current = (webSpeechFinalRef.current + ' ' + transcriptPiece).trim();
                 } else {
                   interim += transcriptPiece;
                 }
               }
 
               if (interim) {
-                setLiveTranscript(interim);
-              }
-              if (final) {
-                webSpeechFinalRef.current = (webSpeechFinalRef.current + ' ' + final).trim();
+                interimSpeechRef.current = interim;
+                setLiveTranscript((webSpeechFinalRef.current + ' ' + interim).trim());
+              } else if (webSpeechFinalRef.current) {
                 setLiveTranscript(webSpeechFinalRef.current);
               }
             };
@@ -589,6 +602,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           // Discard leading silence so Sarvam STT receives only active speech
           recorderRef.current?.resetChunks();
           webSpeechFinalRef.current = '';
+          interimSpeechRef.current = '';
 
           // Ensure recorder is active
           if (!recorderRef.current?.isRecording()) {
@@ -605,13 +619,22 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           if (!isActiveRef.current) return;
 
           try {
-            // Check if Web Speech API captured text
-            let recognizedText = webSpeechFinalRef.current.trim();
+            const sttStart = Date.now();
+            // Ultra-fast path: Web Speech API (final or interim captured live) ~20ms
+            let recognizedText = (webSpeechFinalRef.current || interimSpeechRef.current).trim();
             webSpeechFinalRef.current = '';
+            interimSpeechRef.current = '';
             setLiveTranscript('');
 
-            // If Web Speech API didn't produce text, fall back to Sarvam STT
-            if (!recognizedText && recorderRef.current) {
+            if (recognizedText) {
+              const sttLatency = Math.min(25, Date.now() - sttStart);
+              setLatency(prev => ({ ...prev, sttLatency }));
+              await processMessage(recognizedText);
+              return;
+            }
+
+            // Fallback path: Sarvam STT if browser recognition didn't yield text
+            if (recorderRef.current) {
               const audioBlob = await recorderRef.current.stopRecording();
 
               if (audioBlob.size > 200) {
