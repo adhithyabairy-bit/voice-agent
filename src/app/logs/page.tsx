@@ -1,28 +1,76 @@
 'use client';
 
 // ============================================================
-// Conversation Logs Page — List all past conversations
+// Conversation & Call Logs Page
+// Multi-Business Tenant Architecture
 // ============================================================
 
 import { useState, useEffect } from 'react';
-import { MessageSquare, Clock, Globe, User, ChevronDown, ChevronUp } from 'lucide-react';
-import type { Conversation } from '@/types';
+import { MessageSquare, Clock, Globe, User, ChevronDown, ChevronUp, PhoneCall, Sparkles } from 'lucide-react';
+
+interface DisplayCall {
+  id: string;
+  caller: string;
+  intent: string;
+  summary: string;
+  lead_status: string;
+  language: string;
+  duration: number;
+  created_at: string;
+  messages?: Array<{ speaker: string; message: string; timestamp: string }>;
+}
 
 export default function LogsPage() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [calls, setCalls] = useState<DisplayCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
-        const resp = await fetch('/api/conversations');
+        // Try /api/calls first
+        const resp = await fetch('/api/calls');
         if (resp.ok) {
           const data = await resp.json();
-          setConversations(data.conversations || []);
+          if (Array.isArray(data.calls) && data.calls.length > 0) {
+            const mapped: DisplayCall[] = data.calls.map((c: any) => {
+              const summaryObj = Array.isArray(c.call_summaries) && c.call_summaries[0] ? c.call_summaries[0] : {};
+              return {
+                id: c.id,
+                caller: summaryObj.extracted_data?.name || c.caller_number || 'Caller',
+                intent: summaryObj.customer_intent || 'Inquiry',
+                summary: summaryObj.summary || 'No summary available.',
+                lead_status: summaryObj.lead_status || 'none',
+                language: c.language || 'te-IN',
+                duration: c.duration_seconds || 0,
+                created_at: c.started_at || c.created_at,
+                messages: c.call_messages || [],
+              };
+            });
+            setCalls(mapped);
+            return;
+          }
         }
-      } catch {
-        // Use empty list
+
+        // Fallback to /api/conversations
+        const legacyResp = await fetch('/api/conversations');
+        if (legacyResp.ok) {
+          const legacyData = await legacyResp.json();
+          if (Array.isArray(legacyData.conversations)) {
+            setCalls(legacyData.conversations.map((c: any) => ({
+              id: c.id,
+              caller: c.customer_name || 'Caller',
+              intent: c.intent || 'General inquiry',
+              summary: c.summary || 'No summary available.',
+              lead_status: c.lead_status || 'none',
+              language: c.language || 'te-IN',
+              duration: c.duration || 0,
+              created_at: c.created_at || c.started_at,
+            })));
+          }
+        }
+      } catch (err) {
+        console.error('Error loading logs:', err);
       } finally {
         setLoading(false);
       }
@@ -53,11 +101,11 @@ export default function LogsPage() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in max-w-5xl mx-auto pb-12">
       <div>
-        <h1 className="text-2xl font-bold">Conversations</h1>
+        <h1 className="text-2xl font-bold">Call History & AI Insights</h1>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Review past conversations, summaries, and leads
+          Review past customer calls, AI-generated conversation summaries, and lead classifications.
         </p>
       </div>
 
@@ -65,84 +113,82 @@ export default function LogsPage() {
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin-slow w-8 h-8 border-2 border-[var(--primary)] border-t-transparent rounded-full" />
         </div>
-      ) : conversations.length === 0 ? (
-        <div className="glass-card p-12 text-center">
-          <MessageSquare size={40} className="mx-auto text-[var(--muted-foreground)] mb-4" />
-          <p className="font-medium">No conversations yet</p>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Start a voice call from the AI Agent page to see conversations here.
+      ) : calls.length === 0 ? (
+        <div className="glass-card p-12 text-center space-y-3">
+          <PhoneCall size={40} className="mx-auto text-[var(--muted-foreground)] mb-2 opacity-50" />
+          <p className="font-semibold text-base">No calls recorded yet</p>
+          <p className="text-sm text-[var(--muted-foreground)] max-w-md mx-auto">
+            Test a voice call from the AI Agent page. Your conversation transcripts and AI summaries will be logged here.
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {conversations.map((conv) => (
-            <div key={conv.id} className="glass-card overflow-hidden">
+          {calls.map((call) => (
+            <div key={call.id} className="glass-card overflow-hidden transition hover:border-[var(--primary)]/40">
               <button
-                onClick={() => setExpandedId(expandedId === conv.id ? null : conv.id)}
+                onClick={() => setExpandedId(expandedId === call.id ? null : call.id)}
                 className="w-full flex items-center justify-between p-5 text-left hover:bg-[var(--muted)]/30 transition-colors"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-[var(--muted)] flex items-center justify-center">
-                    <MessageSquare size={18} className="text-[var(--muted-foreground)]" />
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
+                    <PhoneCall size={18} />
                   </div>
                   <div>
-                    <p className="font-medium text-sm">
-                      {conv.customer_name || 'Anonymous'} · {conv.intent || 'General'}
+                    <p className="font-semibold text-sm text-[var(--foreground)]">
+                      {call.caller} · <span className="text-[var(--primary)]">{call.intent}</span>
                     </p>
                     <div className="flex items-center gap-3 mt-1 text-xs text-[var(--muted-foreground)]">
                       <span className="flex items-center gap-1">
-                        <Globe size={10} />
-                        {getLanguageName(conv.language)}
+                        <Globe size={11} />
+                        {getLanguageName(call.language)}
                       </span>
                       <span className="flex items-center gap-1">
-                        <Clock size={10} />
-                        {formatDuration(conv.duration)}
+                        <Clock size={11} />
+                        {formatDuration(call.duration)}
                       </span>
-                      <span>{formatDate(conv.created_at)}</span>
+                      <span>{formatDate(call.created_at)}</span>
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-medium ${
-                    conv.lead_status === 'interested'
-                      ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                      : conv.lead_status === 'converted'
-                      ? 'bg-green-50 text-green-700 border border-green-200'
-                      : 'bg-gray-50 text-gray-600 border border-gray-200'
+                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
+                    call.lead_status === 'interested'
+                      ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                      : call.lead_status === 'converted'
+                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-slate-500/15 text-slate-400 border border-slate-500/30'
                   }`}>
-                    {conv.lead_status || 'none'}
+                    {call.lead_status}
                   </span>
-                  {expandedId === conv.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  {expandedId === call.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                 </div>
               </button>
 
               {/* Expanded detail */}
-              {expandedId === conv.id && (
-                <div className="border-t border-[var(--border)] p-5 space-y-3 animate-fade-in">
-                  {conv.summary && (
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-[var(--muted-foreground)]">Summary</p>
-                      <p className="text-sm">{conv.summary}</p>
+              {expandedId === call.id && (
+                <div className="border-t border-[var(--border)] p-5 space-y-4 animate-fade-in bg-[var(--card)]/40">
+                  {call.summary && (
+                    <div className="space-y-1 bg-[var(--muted)]/30 p-3.5 rounded-xl border border-[var(--border)]">
+                      <p className="text-xs font-semibold text-emerald-400 uppercase tracking-wider flex items-center gap-1">
+                        <Sparkles size={12} /> AI Call Summary
+                      </p>
+                      <p className="text-sm text-[var(--foreground)] leading-relaxed mt-1">{call.summary}</p>
                     </div>
                   )}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-                    <div>
-                      <p className="text-[var(--muted-foreground)]">Language</p>
-                      <p className="font-medium mt-0.5">{getLanguageName(conv.language)}</p>
+
+                  {call.messages && call.messages.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-[var(--muted-foreground)] uppercase">Transcript</p>
+                      <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                        {call.messages.map((m, idx) => (
+                          <div key={idx} className="text-xs flex gap-2">
+                            <span className="font-semibold text-slate-400 capitalize w-16 shrink-0">{m.speaker}:</span>
+                            <span className="text-[var(--foreground)]">{m.message}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-[var(--muted-foreground)]">Duration</p>
-                      <p className="font-medium mt-0.5">{formatDuration(conv.duration)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[var(--muted-foreground)]">Intent</p>
-                      <p className="font-medium mt-0.5">{conv.intent || 'N/A'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[var(--muted-foreground)]">Customer</p>
-                      <p className="font-medium mt-0.5">{conv.customer_name || 'Anonymous'}</p>
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>

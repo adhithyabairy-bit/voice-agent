@@ -1,13 +1,15 @@
 // ============================================================
-// POST /api/voice/chat — LLM Chat (Streaming)
-// Receives user message + context, streams Groq response.
-// Keeps GROQ_API_KEY server-side.
+// POST /api/voice/chat — LLM Chat (Streaming with RAG)
+// Receives user message + businessId, performs vector retrieval,
+// builds dynamic business system prompt, streams Groq response.
 // ============================================================
 
 import { streamChatResponse, isGroqConfigured } from '@/lib/ai/groq';
 import { getDemoResponse } from '@/lib/ai/demo';
 import { getBusinessInfo } from '@/lib/services/business';
+import { retrieveBusinessKnowledge } from '@/lib/ai/knowledge';
 import { buildSystemPrompt } from '@/lib/ai/prompts';
+import { getAuthSession } from '@/lib/auth/session';
 import type { LanguageCode, AgentPersonality } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -20,11 +22,13 @@ export async function POST(request: Request) {
       conversationHistory = [],
       language = 'te-IN',
       personality = 'friendly',
+      businessId,
     } = body as {
       message: string;
       conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
       language: LanguageCode;
       personality: AgentPersonality;
+      businessId?: string;
     };
 
     if (!message) {
@@ -34,7 +38,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Demo mode
+    // Demo mode if Groq not configured
     if (!isGroqConfigured()) {
       const demoResponse = getDemoResponse(message, language);
       return Response.json({
@@ -44,8 +48,26 @@ export async function POST(request: Request) {
       });
     }
 
-    // Fetch business context
-    const businessContext = await getBusinessInfo();
+    // Resolve business context
+    let resolvedBusinessId = businessId;
+    if (!resolvedBusinessId) {
+      const session = await getAuthSession(request);
+      resolvedBusinessId = session?.business?.id;
+    }
+
+    const businessContext = await getBusinessInfo(resolvedBusinessId);
+
+    // Retrieve semantic RAG knowledge chunks for this specific business
+    if (businessContext.business?.id) {
+      try {
+        const chunks = await retrieveBusinessKnowledge(businessContext.business.id, message, 3);
+        businessContext.knowledgeChunks = chunks;
+      } catch (ragErr) {
+        console.warn('RAG knowledge retrieval non-blocking error:', ragErr);
+      }
+    }
+
+    // Build personalized system prompt with dynamic business context & RAG chunks
     const systemPrompt = buildSystemPrompt(businessContext, language, personality);
 
     // Build message array with sliding window (last 10 messages)

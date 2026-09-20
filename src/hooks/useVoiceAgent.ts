@@ -22,6 +22,9 @@ interface VoiceAgentOptions {
   language: LanguageCode;
   voice: string;
   personality: 'friendly' | 'professional' | 'concise';
+  businessId?: string;
+  businessName?: string;
+  greeting?: string;
   onTranscript?: (text: string, role: 'user' | 'assistant') => void;
   onStateChange?: (state: CallState) => void;
   onError?: (error: string) => void;
@@ -373,6 +376,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           })),
           language: optionsRef.current.language,
           personality: optionsRef.current.personality,
+          businessId: optionsRef.current.businessId,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -808,13 +812,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         playerRef.current.onQueueDrained(transitionToListening);
       }
 
-      // Welcome greeting from ABC Dental Clinic
-      const greetings: Record<LanguageCode, string> = {
-        'te-IN': 'నమస్కారం! ఏబీసీ డెంటల్ క్లినిక్‌కి స్వాగతం. నేను మీకు ఎలా సహాయపడగలను?',
-        'hi-IN': 'नमस्ते! एबीसी डेंटल क्लिनिक में आपका स्वागत है। मैं आपकी क्या सहायता कर सकता हूँ?',
-        'en-IN': 'Hello! Welcome to ABC Dental Clinic. How can I help you today?',
+      // Welcome greeting dynamically based on business
+      const bName = optionsRef.current.businessName || 'మా సంస్థ';
+      const bNameHi = optionsRef.current.businessName || 'हमारी संस्था';
+      const bNameEn = optionsRef.current.businessName || 'our office';
+      const defaultGreetings: Record<LanguageCode, string> = {
+        'te-IN': `నమస్కారం! ${bName}కి స్వాగతం. నేను మీకు ఎలా సహాయపడగలను?`,
+        'hi-IN': `नमस्ते! ${bNameHi} में आपका स्वागत है। मैं आपकी क्या सहायता कर सकता हूँ?`,
+        'en-IN': `Hello! Welcome to ${bNameEn}. How can I assist you today?`,
       };
-      const initialGreeting = greetings[optionsRef.current.language] || greetings['en-IN'];
+      const initialGreeting =
+        optionsRef.current.greeting ||
+        defaultGreetings[optionsRef.current.language] ||
+        defaultGreetings['en-IN'];
 
       // Add greeting to transcript and messagesRef
       const greetingMsg = { role: 'assistant' as const, content: initialGreeting, timestamp: Date.now() };
@@ -873,14 +883,15 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       }
     }
 
-    // Save conversation summary
-    if (conversationId && messages.length > 0) {
+    // Save call summary
+    if (messages.length > 0) {
       try {
-        await fetch('/api/conversations', {
+        await fetch('/api/calls', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            conversationId,
+            callId: conversationId,
+            businessId: optionsRef.current.businessId,
             messages: messages.map(m => ({ role: m.role, content: m.content })),
             language: optionsRef.current.language,
             startTime: callStartTimeRef.current,

@@ -1,18 +1,65 @@
 // ============================================================
-// Core type definitions for the Multilingual AI Voice Agent
+// Core type definitions for the Multilingual AI Voice Agent Platform
+// Multi-Business Tenant Architecture
 // ============================================================
 
-// --- Database Entity Types ---
+export type BusinessType =
+  | 'clinic'
+  | 'restaurant'
+  | 'salon'
+  | 'gym'
+  | 'real_estate'
+  | 'dealership'
+  | 'education'
+  | 'retail'
+  | 'professional_services'
+  | 'service'
+  | 'local'
+  | 'other';
+
+export interface Profile {
+  id: string;
+  email: string;
+  full_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface Business {
   id: string;
-  name: string;
+  owner_id?: string | null;
+  business_name: string;
+  name?: string; // backwards compatibility alias
+  business_type: string;
   description: string | null;
-  address: string | null;
   phone: string | null;
+  email?: string | null;
+  website?: string | null;
+  address: string | null;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
   working_hours: Record<string, string>;
+  timezone?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface Agent {
+  id: string;
+  business_id: string;
+  agent_name: string;
+  name?: string; // backwards compatibility alias
+  language: LanguageCode;
+  voice: string;
+  response_style: AgentPersonality;
+  personality?: string | null;
+  system_prompt?: string | null;
+  greeting?: string | null;
+  fallback_message?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Service {
@@ -22,7 +69,10 @@ export interface Service {
   description: string | null;
   price: number | null;
   currency: string;
-  created_at: string;
+  duration_minutes?: number | null;
+  availability?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface FAQ {
@@ -30,21 +80,70 @@ export interface FAQ {
   business_id: string;
   question: string;
   answer: string;
-  created_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
-export interface Agent {
+export interface KnowledgeDocument {
   id: string;
   business_id: string;
-  name: string;
-  language: LanguageCode;
-  voice: string;
-  personality: AgentPersonality;
-  system_prompt: string | null;
-  created_at: string;
-  updated_at: string;
+  title: string;
+  content: string | null;
+  source_type: 'text' | 'faq' | 'policy' | 'upload';
+  file_url?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
+export interface KnowledgeChunk {
+  id: string;
+  business_id: string;
+  document_id?: string | null;
+  content: string;
+  embedding?: number[] | null;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface Call {
+  id: string;
+  business_id: string;
+  agent_id?: string | null;
+  caller_number?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  duration_seconds: number;
+  status: 'connecting' | 'in-progress' | 'completed' | 'failed' | 'missed';
+  language: string;
+  created_at: string;
+}
+
+export interface CallMessage {
+  id: string;
+  call_id: string;
+  speaker: 'user' | 'assistant' | 'system';
+  message: string;
+  timestamp: string;
+}
+
+export interface CallSummary {
+  id: string;
+  call_id: string;
+  summary: string | null;
+  customer_intent: string | null;
+  lead_status: LeadStatus;
+  follow_up_required: boolean;
+  extracted_data?: {
+    name?: string | null;
+    phone?: string | null;
+    requested_service?: string | null;
+    preferred_time?: string | null;
+    [key: string]: unknown;
+  };
+  created_at: string;
+}
+
+// Legacy aliases for backwards compatibility
 export interface Conversation {
   id: string;
   agent_id: string | null;
@@ -83,8 +182,10 @@ export interface Lead {
 
 export interface BusinessContext {
   business: Business;
+  agent?: Agent | null;
   services: Service[];
   faqs: FAQ[];
+  knowledgeChunks?: string[];
 }
 
 // --- Voice / Call State Types ---
@@ -129,50 +230,13 @@ export interface VoiceConfig {
 
 export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
   language: 'te-IN',
-  voice: 'shubh',
+  voice: 'aditya',
   personality: 'friendly',
-  temperature: 0.7,
+  temperature: 0.6,
   maxResponseLength: 150,
   enableInterruption: true,
   enableConversationLogging: true,
 };
-
-// --- Voice Adapter Interface (for future telephony) ---
-
-export interface VoiceAdapter {
-  /** Initialize the adapter (request permissions, etc.) */
-  initialize(): Promise<void>;
-  /** Start capturing audio */
-  startCapture(): Promise<void>;
-  /** Stop capturing audio and return the recorded blob */
-  stopCapture(): Promise<Blob>;
-  /** Play audio from an ArrayBuffer */
-  playAudio(audio: ArrayBuffer): Promise<void>;
-  /** Stop any currently playing audio */
-  stopAudio(): void;
-  /** Check if audio is currently playing */
-  isPlaying(): boolean;
-  /** Clean up resources */
-  destroy(): void;
-}
-
-// --- API Response Types ---
-
-export interface STTResponse {
-  transcript: string;
-  language_code: string;
-  confidence?: number;
-}
-
-export interface ChatResponse {
-  content: string;
-  conversationId?: string;
-}
-
-export interface TTSResponse {
-  audio: ArrayBuffer;
-  duration?: number;
-}
 
 // --- Latency Metrics ---
 

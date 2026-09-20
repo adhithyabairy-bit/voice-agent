@@ -18,13 +18,17 @@ export const metadata: Metadata = {
   keywords: ["AI voice agent", "Indian languages", "Telugu", "Hindi", "voice assistant", "business AI"],
 };
 
+import { AuthProvider } from "@/lib/auth/auth-context";
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

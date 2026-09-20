@@ -3,47 +3,64 @@
 // PUT /api/business — Update business information
 // ============================================================
 
-import { getBusinessInfo, updateBusinessInfo } from '@/lib/services/business';
+import { NextRequest, NextResponse } from 'next/server';
+import { getBusinessInfo, updateBusinessInfo, invalidateBusinessCache } from '@/lib/services/business';
+import { getAuthSession } from '@/lib/auth/session';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const context = await getBusinessInfo();
-    return Response.json(context);
-  } catch (error: unknown) {
-    const err = error as Error;
-    console.error('Business GET Error:', err.message);
-    return Response.json(
-      { error: 'Failed to fetch business info', details: err.message },
+    const { searchParams } = new URL(request.url);
+    const businessIdParam = searchParams.get('businessId');
+
+    const session = await getAuthSession(request);
+    const context = await getBusinessInfo(
+      businessIdParam || session?.business?.id || undefined,
+      session?.userId || undefined
+    );
+
+    return NextResponse.json(context);
+  } catch (error: any) {
+    console.error('Business GET Error:', error.message);
+    return NextResponse.json(
+      { error: 'Failed to fetch business info', details: error.message },
       { status: 500 }
     );
   }
 }
 
-export async function PUT(request: Request) {
+export async function PUT(request: NextRequest) {
   try {
+    const session = await getAuthSession(request);
     const body = await request.json();
     const { businessId, ...data } = body;
 
-    const updated = await updateBusinessInfo(
-      businessId || '00000000-0000-0000-0000-000000000001',
-      data
-    );
+    const targetBusinessId = businessId || session?.business?.id;
+
+    if (!targetBusinessId) {
+      return NextResponse.json(
+        { error: 'No business found to update. Please complete onboarding.' },
+        { status: 400 }
+      );
+    }
+
+    const updated = await updateBusinessInfo(targetBusinessId, data);
 
     if (!updated) {
-      return Response.json(
+      return NextResponse.json(
         { error: 'Failed to update business info' },
         { status: 500 }
       );
     }
 
-    return Response.json({ business: updated });
-  } catch (error: unknown) {
-    const err = error as Error;
-    console.error('Business PUT Error:', err.message);
-    return Response.json(
-      { error: 'Failed to update business info', details: err.message },
+    invalidateBusinessCache(targetBusinessId);
+
+    return NextResponse.json({ business: updated });
+  } catch (error: any) {
+    console.error('Business PUT Error:', error.message);
+    return NextResponse.json(
+      { error: 'Failed to update business info', details: error.message },
       { status: 500 }
     );
   }

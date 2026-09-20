@@ -35,6 +35,12 @@ export default function LandingPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Link
+              href="/onboarding"
+              className="text-sm font-semibold text-emerald-400 hover:text-emerald-300 transition-colors hidden sm:flex items-center gap-1 no-underline"
+            >
+              <Sparkles size={14} /> Create Business Agent
+            </Link>
+            <Link
               href="/dashboard"
               className="text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors hidden sm:block no-underline"
             >
@@ -47,7 +53,7 @@ export default function LandingPage() {
               id="cta-try-agent"
             >
               <Phone size={14} />
-              Try AI Agent
+              Try Live Call
             </Link>
           </div>
         </div>
@@ -67,27 +73,35 @@ export default function LandingPage() {
           {/* Badge */}
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-[var(--border)] bg-[var(--card)] text-xs font-medium text-[var(--muted-foreground)]">
             <Sparkles size={12} className="text-[var(--accent)]" />
-            Real-time multilingual voice AI
+            Autonomous Multilingual AI Voice Receptionist for Any Business
           </div>
 
           {/* Headline */}
           <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1]">
-            AI Voice Agents for{' '}
+            Custom AI Voice Agents for{' '}
             <span
               className="bg-clip-text text-transparent animate-gradient"
               style={{ backgroundImage: 'var(--gradient-hero)' }}
             >
-              Indian Businesses
+              Clinics, Salons, Dining & More
             </span>
           </h1>
 
           {/* Subtitle */}
           <p className="text-lg md:text-xl text-[var(--muted-foreground)] max-w-2xl mx-auto leading-relaxed">
-            Talk to your customers in Telugu, Hindi, English and more — naturally, instantly, and 24/7.
+            Create a dedicated AI voice receptionist in under 2 minutes. Speaks Telugu, Hindi, English, and answers customer queries with sub-500ms latency.
           </p>
 
           {/* CTAs */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+            <Link
+              href="/onboarding"
+              className="flex items-center gap-2 px-8 py-3.5 rounded-full text-slate-950 font-bold text-base transition-all hover:scale-105 active:scale-95 shadow-lg no-underline bg-gradient-to-r from-emerald-400 to-teal-400"
+              id="hero-cta-onboarding"
+            >
+              <Sparkles size={18} />
+              Setup Your Business (Free)
+            </Link>
             <Link
               href="/agent"
               className="flex items-center gap-2 px-8 py-3.5 rounded-full text-white text-base font-medium transition-all hover:opacity-90 hover:scale-105 active:scale-95 shadow-lg no-underline"
@@ -95,16 +109,8 @@ export default function LandingPage() {
               id="hero-cta-primary"
             >
               <Phone size={18} />
-              Try AI Agent
+              Try Live Call
             </Link>
-            <a
-              href="#demo"
-              className="flex items-center gap-2 px-8 py-3.5 rounded-full text-[var(--foreground)] text-base font-medium border border-[var(--border)] transition-all hover:bg-[var(--muted)] hover:scale-105 active:scale-95 no-underline"
-              id="hero-cta-secondary"
-            >
-              View Demo
-              <ArrowRight size={16} />
-            </a>
           </div>
         </div>
       </section>
@@ -125,8 +131,8 @@ export default function LandingPage() {
                   <Mic size={18} />
                 </div>
                 <div>
-                  <p className="font-semibold text-sm">ABC Dental Clinic</p>
-                  <p className="text-xs text-[var(--muted-foreground)]">AI Receptionist</p>
+                  <p className="font-semibold text-sm">Any Business AI Agent</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">Autonomous Phone Receptionist</p>
                 </div>
               </div>
               <span className="text-xs px-3 py-1 rounded-full bg-green-100 text-green-700 font-medium">● Live</span>
