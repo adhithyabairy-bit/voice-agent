@@ -20,6 +20,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth/auth-context';
+import { authFetch } from '@/lib/api/auth-fetch';
 
 export default function DashboardPage() {
   const { user, business } = useAuth();
@@ -32,8 +33,8 @@ export default function DashboardPage() {
       try {
         setLoading(true);
         const [bizRes, callsRes] = await Promise.all([
-          fetch('/api/business'),
-          fetch('/api/calls'),
+          authFetch('/api/business'),
+          authFetch('/api/calls'),
         ]);
 
         if (bizRes.ok) {

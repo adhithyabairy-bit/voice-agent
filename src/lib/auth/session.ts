@@ -66,11 +66,21 @@ export async function getAuthSession(request: Request): Promise<AuthSession> {
     let email: string | null = null;
 
     if (token) {
-      const client = createClient(supabaseUrl, supabaseAnonKey);
-      const { data: { user }, error } = await client.auth.getUser(token);
-      if (!error && user) {
-        userId = user.id;
-        email = user.email || null;
+      try {
+        const { data: adminData, error: adminError } = await supabaseAdmin.auth.getUser(token);
+        if (!adminError && adminData?.user) {
+          userId = adminData.user.id;
+          email = adminData.user.email || null;
+        } else {
+          const client = createClient(supabaseUrl, supabaseAnonKey);
+          const { data: clientData, error: clientError } = await client.auth.getUser(token);
+          if (!clientError && clientData?.user) {
+            userId = clientData.user.id;
+            email = clientData.user.email || null;
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching user with token:', err);
       }
     }
 

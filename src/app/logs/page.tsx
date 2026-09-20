@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import { MessageSquare, Clock, Globe, User, ChevronDown, ChevronUp, PhoneCall, Sparkles } from 'lucide-react';
+import { authFetch } from '@/lib/api/auth-fetch';
 
 interface DisplayCall {
   id: string;
@@ -29,7 +30,7 @@ export default function LogsPage() {
     async function load() {
       try {
         // Try /api/calls first
-        const resp = await fetch('/api/calls');
+        const resp = await authFetch('/api/calls');
         if (resp.ok) {
           const data = await resp.json();
           if (Array.isArray(data.calls) && data.calls.length > 0) {

@@ -26,22 +26,43 @@ export default function SignUpPage() {
     setError(null);
 
     try {
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-          },
-        },
+      // 1. Create & auto-verify user via admin API
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, fullName }),
       });
 
-      if (signUpError) throw signUpError;
-
-      if (data.user) {
-        // Redirect to onboarding
-        router.push('/onboarding');
+      const resData = await res.json();
+      if (!res.ok) {
+        // If user is already registered, try signing in directly
+        if (res.status === 409 || resData.error?.toLowerCase().includes('already registered')) {
+          const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
+          if (signInErr) {
+            throw new Error(resData.error || 'Account exists. Please sign in with your password.');
+          }
+          router.push('/onboarding');
+          return;
+        }
+        throw new Error(resData.error || 'Failed to create account');
       }
+
+      // 2. Sign in to establish active session in browser
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) throw signInError;
+
+      // 3. Sync cookie for server-side Next.js route handlers
+      if (signInData.session?.access_token && typeof document !== 'undefined') {
+        const maxAge = signInData.session.expires_in || 3600;
+        document.cookie = `sb-access-token=${signInData.session.access_token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+      }
+
+      // Redirect to onboarding with active authenticated session
+      router.push('/onboarding');
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to create account');
     } finally {

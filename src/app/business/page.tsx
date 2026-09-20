@@ -22,6 +22,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { Service, FAQ } from '@/types';
+import { authFetch } from '@/lib/api/auth-fetch';
 
 export default function BusinessPage() {
   const [loading, setLoading] = useState(true);
@@ -64,7 +65,7 @@ export default function BusinessPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const resp = await fetch('/api/business');
+      const resp = await authFetch('/api/business');
       if (resp.ok) {
         const data = await resp.json();
         if (data.business) {
@@ -100,7 +101,7 @@ export default function BusinessPage() {
   const handleSaveBusiness = async () => {
     setSaving(true);
     try {
-      await fetch('/api/business', {
+      await authFetch('/api/business', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,7 +121,7 @@ export default function BusinessPage() {
   const handleAddService = async () => {
     if (!newServiceName.trim()) return;
     try {
-      const res = await fetch('/api/services', {
+      const res = await authFetch('/api/services', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -148,7 +149,7 @@ export default function BusinessPage() {
 
   const handleDeleteService = async (id: string) => {
     try {
-      const res = await fetch(`/api/services/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/services/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setServices(services.filter((s) => s.id !== id));
       }
@@ -160,7 +161,7 @@ export default function BusinessPage() {
   const handleAddFaq = async () => {
     if (!newFaqQuestion.trim() || !newFaqAnswer.trim()) return;
     try {
-      const res = await fetch('/api/faqs', {
+      const res = await authFetch('/api/faqs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -184,7 +185,7 @@ export default function BusinessPage() {
 
   const handleDeleteFaq = async (id: string) => {
     try {
-      const res = await fetch(`/api/faqs/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/faqs/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setFaqs(faqs.filter((f) => f.id !== id));
       }

@@ -7,6 +7,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '@/lib/db/supabase';
+import { authFetch } from '@/lib/api/auth-fetch';
 import type { Business, Agent } from '@/types';
 import type { User } from '@supabase/supabase-js';
 
@@ -36,7 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchBusinessData = useCallback(async (userId: string) => {
     try {
-      const resp = await fetch('/api/business');
+      const resp = await authFetch('/api/business');
       if (resp.ok) {
         const data = await resp.json();
         if (data.business) {

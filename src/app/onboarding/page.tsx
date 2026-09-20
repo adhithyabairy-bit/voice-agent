@@ -3,6 +3,8 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth/auth-context';
+import { supabase } from '@/lib/db/supabase';
+import { authFetch } from '@/lib/api/auth-fetch';
 import {
   Building2,
   Bot,
@@ -16,6 +18,8 @@ import {
   Trash2,
   Sparkles,
   Loader2,
+  Lock,
+  X,
 } from 'lucide-react';
 
 interface ServiceItem {
@@ -128,6 +132,14 @@ export default function OnboardingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Authentication modal state for unauthenticated launch attempts
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authModalError, setAuthModalError] = useState<string | null>(null);
+
   // Step 1: Business details
   const [businessName, setBusinessName] = useState('');
   const [businessType, setBusinessType] = useState('clinic');
@@ -202,6 +214,14 @@ export default function OnboardingPage() {
       return;
     }
 
+    // Check if user has an active session before submitting
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) {
+      setAuthEmail(email || user?.email || '');
+      setShowAuthModal(true);
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
 
@@ -211,7 +231,7 @@ export default function OnboardingPage() {
         business_type: businessType,
         description,
         phone,
-        email,
+        email: email || session.user.email || '',
         address,
         agent_name: agentName,
         language,
@@ -223,7 +243,7 @@ export default function OnboardingPage() {
         knowledge_docs: docContent.trim() ? [{ title: docTitle, content: docContent }] : [],
       };
 
-      const res = await fetch('/api/onboarding', {
+      const res = await authFetch('/api/onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -231,6 +251,11 @@ export default function OnboardingPage() {
 
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 401) {
+          setAuthEmail(email || user?.email || '');
+          setShowAuthModal(true);
+          return;
+        }
         throw new Error(data.error || 'Failed to complete onboarding');
       }
 
@@ -241,6 +266,66 @@ export default function OnboardingPage() {
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleModalAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail || !authPassword) return;
+
+    setAuthLoading(true);
+    setAuthModalError(null);
+
+    try {
+      if (authMode === 'signup') {
+        const regRes = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: authEmail, password: authPassword, fullName: businessName }),
+        });
+        const regData = await regRes.json();
+        if (!regRes.ok && regRes.status !== 409) {
+          throw new Error(regData.error || 'Failed to sign up');
+        }
+      }
+
+      let { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+
+      if (signInError && signInError.message.toLowerCase().includes('email not confirmed')) {
+        await fetch('/api/auth/auto-confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: authEmail }),
+        });
+        const retry = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        data = retry.data;
+        signInError = retry.error;
+      }
+
+      if (signInError) {
+        throw signInError;
+      }
+
+      if (data?.session?.access_token && typeof document !== 'undefined') {
+        const maxAge = data.session.expires_in || 3600;
+        document.cookie = `sb-access-token=${data.session.access_token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+      }
+
+      setShowAuthModal(false);
+      // Wait a tick for auth state to update, then submit onboarding
+      setTimeout(() => {
+        handleSubmit();
+      }, 150);
+    } catch (err: any) {
+      setAuthModalError(err.message || 'Authentication failed. Please verify your email and password.');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -314,8 +399,20 @@ export default function OnboardingPage() {
       {/* Main Wizard Card */}
       <div className="max-w-3xl w-full bg-slate-900/90 border border-slate-800/80 rounded-2xl p-6 sm:p-8 backdrop-blur-xl shadow-2xl">
         {error && (
-          <div className="mb-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-sm">
-            {error}
+          <div className="mb-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>{error}</div>
+            {(error.toLowerCase().includes('sign in') || error.toLowerCase().includes('unauthorized')) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthEmail(email || user?.email || '');
+                  setShowAuthModal(true);
+                }}
+                className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold text-xs shrink-0 transition shadow-md shadow-emerald-500/20"
+              >
+                Sign In & Launch Now
+              </button>
+            )}
           </div>
         )}
 
@@ -833,6 +930,98 @@ export default function OnboardingPage() {
           )}
         </div>
       </div>
+
+      {/* Inline Auth Modal (Preserves all form state!) */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setShowAuthModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">
+                  {authMode === 'signin' ? 'Sign In to Launch' : 'Create Account & Launch'}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Save & launch <span className="text-emerald-400 font-medium">{businessName || 'your business'}</span>
+                </p>
+              </div>
+            </div>
+
+            {authModalError && (
+              <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+                {authModalError}
+              </div>
+            )}
+
+            <form onSubmit={handleModalAuth} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Business Email</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="name@business.com"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Password</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition disabled:opacity-50"
+              >
+                {authLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Verifying...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" /> {authMode === 'signin' ? 'Sign In & Launch Receptionist' : 'Register & Launch Receptionist'}
+                  </>
+                )}
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode(authMode === 'signin' ? 'signup' : 'signin');
+                    setAuthModalError(null);
+                  }}
+                  className="text-xs text-slate-400 hover:text-emerald-400 transition"
+                >
+                  {authMode === 'signin'
+                    ? "Don't have an account? Sign up & launch"
+                    : 'Already have an account? Sign in & launch'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

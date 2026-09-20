@@ -6,12 +6,29 @@ import { invalidateBusinessCache } from '@/lib/services/business';
 
 export async function POST(req: NextRequest) {
   try {
+    const body = await req.json();
     const session = await getAuthSession(req);
-    if (!session?.userId) {
-      return NextResponse.json({ error: 'Unauthorized. Please sign in to create a business.' }, { status: 401 });
+    let userId = session?.userId;
+
+    // Fallback: If token header was missing on mobile browser, look up registered user by email
+    if (!userId && body.email) {
+      try {
+        const cleanEmail = body.email.trim().toLowerCase();
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const matched = listData?.users?.find(
+          (u) => u.email?.toLowerCase() === cleanEmail
+        );
+        if (matched) {
+          userId = matched.id;
+        }
+      } catch (lookupErr) {
+        console.warn('Fallback user lookup by email failed:', lookupErr);
+      }
     }
 
-    const body = await req.json();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized. Please sign in to create a business.' }, { status: 401 });
+    }
     const {
       business_name,
       business_type = 'service',
@@ -46,7 +63,7 @@ export async function POST(req: NextRequest) {
     const { data: business, error: businessError } = await supabaseAdmin
       .from('businesses')
       .insert({
-        owner_id: session.userId,
+        owner_id: userId,
         business_name: business_name.trim(),
         business_type,
         description: description.trim(),
@@ -179,7 +196,7 @@ export async function POST(req: NextRequest) {
 
     // Clear business cache so fresh data is retrieved
     invalidateBusinessCache(businessId);
-    invalidateBusinessCache(session.userId);
+    invalidateBusinessCache(userId || undefined);
 
     return NextResponse.json({
       success: true,

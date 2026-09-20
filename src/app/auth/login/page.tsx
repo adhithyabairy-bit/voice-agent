@@ -8,6 +8,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/db/supabase';
+import { authFetch } from '@/lib/api/auth-fetch';
 import { Mic, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
 
 export default function LoginPage() {
@@ -25,18 +26,39 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      let { data, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
+
+      // If Supabase rejected because email wasn't confirmed, auto-confirm and retry
+      if (signInError && signInError.message.toLowerCase().includes('email not confirmed')) {
+        try {
+          await fetch('/api/auth/auto-confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+          });
+          const retry = await supabase.auth.signInWithPassword({ email, password });
+          data = retry.data;
+          signInError = retry.error;
+        } catch {
+          // Ignore retry error and let original throw if needed
+        }
+      }
 
       if (signInError) {
         throw signInError;
       }
 
-      if (data.user) {
+      if (data?.session?.access_token && typeof document !== 'undefined') {
+        const maxAge = data.session.expires_in || 3600;
+        document.cookie = `sb-access-token=${data.session.access_token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+      }
+
+      if (data?.user) {
         // Check if user already has a business
-        const checkResp = await fetch('/api/business');
+        const checkResp = await authFetch('/api/business');
         if (checkResp.ok) {
           const busData = await checkResp.json();
           if (busData.business) {

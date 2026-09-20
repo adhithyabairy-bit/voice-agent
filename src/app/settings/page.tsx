@@ -5,6 +5,7 @@
 // ============================================================
 
 import { useState, useEffect } from 'react';
+import { authFetch } from '@/lib/api/auth-fetch';
 import {
   Settings as SettingsIcon,
   CheckCircle2,
@@ -24,8 +25,9 @@ interface AgentInfo {
     name: string;
     language: string;
     voice: string;
-    personality: string;
-    status: string;
+    personality?: string;
+    greeting?: string;
+    status?: string;
   };
   providers: {
     groq: ProviderStatus;
@@ -45,7 +47,7 @@ export default function SettingsPage() {
   const loadStatus = async () => {
     setLoading(true);
     try {
-      const resp = await fetch('/api/agent');
+      const resp = await authFetch('/api/agent');
       if (resp.ok) {
         const data = await resp.json();
         setAgentInfo(data);

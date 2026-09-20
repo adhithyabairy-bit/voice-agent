@@ -19,6 +19,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import type { KnowledgeDocument } from '@/types';
+import { authFetch } from '@/lib/api/auth-fetch';
 
 export default function KnowledgePage() {
   const [loading, setLoading] = useState(true);
@@ -40,7 +41,7 @@ export default function KnowledgePage() {
   const loadDocuments = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/knowledge');
+      const res = await authFetch('/api/knowledge');
       if (res.ok) {
         const data = await res.json();
         setDocuments(data.documents || []);
@@ -61,7 +62,7 @@ export default function KnowledgePage() {
     if (!docTitle.trim() || !docContent.trim()) return;
     setSaving(true);
     try {
-      const res = await fetch('/api/knowledge', {
+      const res = await authFetch('/api/knowledge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -86,7 +87,7 @@ export default function KnowledgePage() {
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await fetch(`/api/knowledge/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/knowledge/${id}`, { method: 'DELETE' });
       if (res.ok) {
         await loadDocuments();
       }

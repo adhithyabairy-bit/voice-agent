@@ -41,7 +41,9 @@ export const supabaseAdmin: SupabaseClient = new Proxy({} as SupabaseClient, {
       if (!isSupabaseConfigured()) {
         throw new Error('Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
       }
-      _supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey);
+      _supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
     }
     return (_supabaseAdmin as unknown as Record<string, unknown>)[prop as string];
   },

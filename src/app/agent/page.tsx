@@ -16,6 +16,7 @@ import { CallStatus } from '@/components/voice/call-status';
 import { LanguageSelector } from '@/components/voice/language-selector';
 import { useVoiceAgent } from '@/hooks/useVoiceAgent';
 import { useAuth } from '@/lib/auth/auth-context';
+import { authFetch } from '@/lib/api/auth-fetch';
 import type { LanguageCode, AgentPersonality, Business, Agent } from '@/types';
 
 export default function AgentPage() {
@@ -34,7 +35,7 @@ export default function AgentPage() {
   useEffect(() => {
     async function loadContext() {
       try {
-        const res = await fetch('/api/business');
+        const res = await authFetch('/api/business');
         if (res.ok) {
           const data = await res.json();
           if (data.business) {
