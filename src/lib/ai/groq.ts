@@ -3,7 +3,7 @@ import Groq from 'groq-sdk';
 // ============================================================
 // Groq LLM Service
 // Provides streaming chat completions using Groq's API.
-// Model: llama-3.3-70b-versatile (strong multilingual support)
+// Model: qwen/qwen3.8-27b (strong multilingual support)
 // ============================================================
 
 let groqClient: Groq | null = null;
@@ -41,7 +41,7 @@ export async function* streamChatResponse(
   const client = getGroqClient();
 
   const stream = await client.chat.completions.create({
-    model: options?.model || 'llama-3.3-70b-versatile',
+    model: options?.model || 'qwen/qwen3.8-27b',
     messages,
     stream: true,
     temperature: options?.temperature ?? 0.7,
@@ -71,7 +71,7 @@ export async function getChatResponse(
   const client = getGroqClient();
 
   const response = await client.chat.completions.create({
-    model: options?.model || 'llama-3.3-70b-versatile',
+    model: options?.model || 'qwen/qwen3.8-27b',
     messages,
     temperature: options?.temperature ?? 0.7,
     max_tokens: options?.maxTokens ?? 300,

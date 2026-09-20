@@ -115,7 +115,7 @@ export default function SettingsPage() {
               <div>
                 <p className="font-medium text-sm">Groq (LLM)</p>
                 <p className="text-xs text-[var(--muted-foreground)]">
-                  llama-3.3-70b-versatile — Chat completions with streaming
+                  qwen3.8-27b — Chat completions with streaming
                 </p>
               </div>
               <StatusBadge configured={agentInfo?.providers?.groq?.configured ?? false} />
