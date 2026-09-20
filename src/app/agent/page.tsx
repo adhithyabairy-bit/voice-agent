@@ -1,12 +1,12 @@
 'use client';
 
 // ============================================================
-// AI Agent Page — The core voice interaction interface
-// Left: Agent config | Right: Live call + transcript
+// AI Agent Page — Live Full-Duplex Voice Call Interface
+// Left: Agent config | Right: Live voice call + live transcript
 // ============================================================
 
 import { useState, useRef } from 'react';
-import { Send, Settings, AlertTriangle, Volume2 } from 'lucide-react';
+import { Settings, AlertTriangle, Volume2, Keyboard, PhoneOff, Send } from 'lucide-react';
 import { CallButton } from '@/components/voice/call-button';
 import { Waveform } from '@/components/voice/waveform';
 import { Transcript } from '@/components/voice/transcript';
@@ -20,6 +20,7 @@ export default function AgentPage() {
   const [voice, setVoice] = useState('shubh');
   const [personality, setPersonality] = useState<AgentPersonality>('friendly');
   const [textInput, setTextInput] = useState('');
+  const [showKeyboard, setShowKeyboard] = useState(false);
   const textInputRef = useRef<HTMLInputElement>(null);
 
   const voiceAgent = useVoiceAgent({
@@ -45,7 +46,7 @@ export default function AgentPage() {
           <div>
             <h1 className="text-xl font-bold">AI Agent</h1>
             <p className="text-sm text-[var(--muted-foreground)] mt-1">
-              Configure and test your voice agent
+              Configure and test your live voice agent
             </p>
           </div>
 
@@ -135,7 +136,7 @@ export default function AgentPage() {
             />
             <div className="flex justify-between text-[10px] text-[var(--muted-foreground)]">
               <span>Normal (100%)</span>
-              <span>Boosted (180%)</span>
+              <span>Amplified (180%)</span>
               <span>Max (250%)</span>
             </div>
           </div>
@@ -174,7 +175,7 @@ export default function AgentPage() {
           )}
         </div>
 
-        {/* Right Panel — Live Call Interface */}
+        {/* Right Panel — Live Voice Call Interface */}
         <div className="glass-card flex flex-col min-h-[600px]">
           {/* Demo mode warning */}
           {voiceAgent.isDemo && (
@@ -191,10 +192,11 @@ export default function AgentPage() {
               language={language}
               latency={voiceAgent.latency}
               isDemo={voiceAgent.isDemo}
+              duration={voiceAgent.callDuration}
             />
           </div>
 
-          {/* Main call area */}
+          {/* Main live call arena */}
           <div className="flex-1 flex flex-col items-center justify-center p-8 gap-6">
             {/* Waveform */}
             <Waveform state={voiceAgent.callState} volume={voiceAgent.volume} />
@@ -207,16 +209,24 @@ export default function AgentPage() {
               volume={voiceAgent.volume}
             />
 
-            {/* Live speech feedback & manual send button */}
-            {voiceAgent.callState === 'listening' && (
+            {/* Real-time Call Status / Voice Feedback */}
+            {isCallActive && (
               <div className="flex flex-col items-center gap-2 animate-fade-in max-w-lg text-center">
-                {voiceAgent.liveTranscript ? (
+                {voiceAgent.callState === 'speaking' ? (
+                  <div className="text-xs px-4 py-2 rounded-full font-medium bg-purple-50 text-purple-800 border border-purple-300 shadow-sm animate-pulse">
+                    🔊 AI Speaking... (speak anytime to interrupt)
+                  </div>
+                ) : voiceAgent.callState === 'processing' ? (
+                  <div className="text-xs px-4 py-2 rounded-full font-medium bg-amber-50 text-amber-800 border border-amber-300 shadow-sm animate-pulse">
+                    ⚡ Responding...
+                  </div>
+                ) : voiceAgent.liveTranscript ? (
                   <div className="text-xs px-4 py-2 rounded-full font-medium bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-sm animate-pulse">
                     🎙️ &ldquo;{voiceAgent.liveTranscript}&rdquo;
                   </div>
                 ) : (
                   <div
-                    className={`text-xs px-3.5 py-1.5 rounded-full font-medium transition-all ${
+                    className={`text-xs px-4 py-2 rounded-full font-medium transition-all ${
                       voiceAgent.isSpeakingDetected
                         ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
                         : 'bg-blue-50 text-blue-700 border border-blue-200'
@@ -225,21 +235,10 @@ export default function AgentPage() {
                     {voiceAgent.isSpeakingDetected ? '🎙️ Hearing your voice... Speak naturally' : '👂 Listening for your voice...'}
                   </div>
                 )}
-
-                {voiceAgent.isSpeakingDetected && (
-                  <button
-                    onClick={voiceAgent.stopSpeakingAndSend}
-                    className="text-xs px-4 py-1.5 rounded-full bg-[var(--primary)] text-white font-medium shadow-sm hover:opacity-90 transition-all flex items-center gap-1.5"
-                    id="done-speaking-btn"
-                  >
-                    <span>Done Speaking</span>
-                    <Send size={12} />
-                  </button>
-                )}
               </div>
             )}
 
-            {/* Unclear speech feedback notice */}
+            {/* Feedback notice if voice was silent/unclear */}
             {voiceAgent.feedbackNotice && (
               <div className="text-xs px-3.5 py-1.5 rounded-full font-medium bg-amber-50 text-amber-800 border border-amber-300 animate-fade-in">
                 ℹ️ {voiceAgent.feedbackNotice}
@@ -255,44 +254,53 @@ export default function AgentPage() {
             )}
           </div>
 
-          {/* Transcript area (clean container without duplicate nested scrollbars) */}
+          {/* Transcript area (clean container) */}
           <div className="border-t border-[var(--border)] p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
+                Live Conversation
+              </span>
+              <button
+                onClick={() => setShowKeyboard(prev => !prev)}
+                className="text-[11px] text-[var(--primary)] hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <Keyboard size={12} />
+                {showKeyboard ? 'Hide keyboard' : 'Type message fallback'}
+              </button>
+            </div>
             <Transcript
               messages={voiceAgent.messages}
               isProcessing={voiceAgent.callState === 'processing'}
             />
           </div>
 
-          {/* Text input fallback */}
-          <div className="border-t border-[var(--border)] p-4">
-            <div className="flex gap-2">
-              <input
-                ref={textInputRef}
-                type="text"
-                value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
-                placeholder={isCallActive ? 'Type a message (text fallback)...' : 'Start a call or type a message...'}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                id="text-input"
-              />
-              <button
-                onClick={handleSendText}
-                disabled={!textInput.trim()}
-                className="px-4 py-2.5 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-40"
-                style={{ background: 'var(--gradient-primary)' }}
-                aria-label="Send message"
-                id="send-button"
-              >
-                <Send size={16} />
-              </button>
+          {/* Optional Text input fallback (hidden during live call by default) */}
+          {showKeyboard && (
+            <div className="border-t border-[var(--border)] p-4 bg-[var(--muted)]/50 animate-fade-in">
+              <div className="flex gap-2">
+                <input
+                  ref={textInputRef}
+                  type="text"
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+                  placeholder="Type a message (keyboard fallback)..."
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                  id="text-input"
+                />
+                <button
+                  onClick={handleSendText}
+                  disabled={!textInput.trim()}
+                  className="px-4 py-2.5 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-40"
+                  style={{ background: 'var(--gradient-primary)' }}
+                  aria-label="Send message"
+                  id="send-button"
+                >
+                  <Send size={16} />
+                </button>
+              </div>
             </div>
-            {!isCallActive && (
-              <p className="text-[10px] text-[var(--muted-foreground)] mt-2 text-center">
-                Voice unavailable? Use text input as a fallback.
-              </p>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </div>

@@ -46,6 +46,7 @@ interface VoiceAgentReturn {
   volumeBoost: number;
   setVolumeBoost: (vol: number) => void;
   feedbackNotice: string | null;
+  callDuration: number;
 }
 
 interface BrowserSpeechRecognition {
@@ -125,6 +126,21 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const [liveTranscript, setLiveTranscript] = useState('');
   const [volumeBoost, setVolumeBoostState] = useState(1.8);
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
+  const [callDuration, setCallDuration] = useState(0);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout | null = null;
+    if (['listening', 'speaking', 'processing'].includes(callState)) {
+      timer = setInterval(() => {
+        setCallDuration((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setCallDuration(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [callState]);
 
   // Refs for audio components and pipeline coordination
   const recorderRef = useRef<AudioRecorder | null>(null);
@@ -553,11 +569,11 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
       }
 
-      // Initialize VAD with sensitive threshold & adaptive noise
+      // Initialize VAD with sensitive threshold & snappy hangover time for live natural turn-taking
       const vad = new VoiceActivityDetector({
-        threshold: 0.008,
-        hangoverTime: 1200,
-        minSpeechDuration: 150,
+        threshold: 0.007,
+        hangoverTime: 650,
+        minSpeechDuration: 120,
         onSpeechStart: () => {
           if (!isActiveRef.current) return;
           setIsSpeakingDetected(true);
@@ -677,7 +693,36 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       isActiveRef.current = true;
       callStartTimeRef.current = Date.now();
-      updateState('listening');
+
+      // In a real live call, the AI receptionist speaks first to welcome the caller!
+      const greetings: Record<LanguageCode, string> = {
+        'te-IN': 'నమస్కారం! ఏబీసీ క్లినిక్‌కి స్వాగతం. నేను మీకు ఎలా సహాయపడగలను?',
+        'hi-IN': 'नमस्ते! एबीसी क्लिनिक में आपका स्वागत है. मैं आपकी क्या सहायता कर सकता हूँ?',
+        'en-IN': 'Hello! Welcome to ABC Clinic. How can I assist you today?',
+      };
+      const initialGreeting = greetings[optionsRef.current.language] || greetings['en-IN'];
+
+      // Add greeting to transcript
+      setMessages([{ role: 'assistant', content: initialGreeting, timestamp: Date.now() }]);
+      optionsRef.current.onTranscript?.(initialGreeting, 'assistant');
+
+      // Hook up player queue drained listener so agent automatically listens once greeting finishes
+      if (playerRef.current) {
+        playerRef.current.onQueueDrained(() => {
+          if (isActiveRef.current) {
+            try {
+              recorderRef.current?.startRecording();
+            } catch {
+              // Ignore
+            }
+            vadRef.current?.resume();
+            updateState('listening');
+          }
+        });
+      }
+
+      updateState('speaking');
+      await synthesizeAndQueueChunk(initialGreeting);
 
       // Check demo mode
       try {
@@ -695,7 +740,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       optionsRef.current.onError?.(errorMsg);
       updateState('error');
     }
-  }, [updateState, processMessage, volumeBoost]);
+  }, [updateState, processMessage, volumeBoost, synthesizeAndQueueChunk]);
 
   /**
    * End the voice call.
@@ -806,5 +851,6 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     volumeBoost,
     setVolumeBoost,
     feedbackNotice,
+    callDuration,
   };
 }
