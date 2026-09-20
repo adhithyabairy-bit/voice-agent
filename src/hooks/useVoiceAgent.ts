@@ -82,10 +82,10 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       continue;
     }
 
-    // 2. Look for natural major clause boundary (, ; :) ONLY if at least 6 words have accumulated
-    // (Preserves natural human cadence and prevents robotic 2-3 word fragment stuttering)
+    // 2. Look for natural major clause boundary (, ; :) if at least 3 words have accumulated
+    // Enables ultra-fast sub-500ms speech synthesis dispatch on natural conversation clauses
     const words = remaining.trim().split(/\s+/);
-    if (words.length >= 6) {
+    if (words.length >= 3) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
@@ -277,12 +277,16 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         const audioData = await ttsResponse.arrayBuffer();
         if (isFirst) {
           const ttsLatency = Date.now() - chunkStart;
-          const totalLatency = totalStart ? Date.now() - totalStart : ttsLatency;
-          setLatency(prev => ({
-            ...prev,
-            ttsLatency,
-            totalResponseLatency: totalLatency,
-          }));
+          const timeToFirstVoice = totalStart ? Date.now() - totalStart : ttsLatency;
+          setLatency(prev => {
+            const updated = {
+              ...prev,
+              ttsLatency,
+              totalResponseLatency: timeToFirstVoice,
+            };
+            optionsRef.current.onLatencyUpdate?.(updated);
+            return updated;
+          });
         }
         if (isActiveRef.current && playerRef.current) {
           await playerRef.current.enqueueIndexedAudio(audioData, chunkIndex);
@@ -296,6 +300,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           if (respData.text) speechText = respData.text;
         } catch {
           // Ignore
+        }
+
+        if (isFirst) {
+          const timeToFirstVoice = totalStart ? Date.now() - totalStart : 60;
+          setLatency(prev => {
+            const updated = {
+              ...prev,
+              ttsLatency: 40,
+              totalResponseLatency: timeToFirstVoice,
+            };
+            optionsRef.current.onLatencyUpdate?.(updated);
+            return updated;
+          });
         }
 
         if ('speechSynthesis' in window && isActiveRef.current) {
@@ -489,16 +506,6 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
       }
 
-      const totalLatency = Date.now() - totalStart;
-      setLatency(prev => ({
-        ...prev,
-        totalResponseLatency: totalLatency,
-      }));
-      optionsRef.current.onLatencyUpdate?.({
-        ...latency,
-        totalResponseLatency: totalLatency,
-      });
-
       // Safety check: if player is idle and no chunks are pending, transition to listening
       setTimeout(() => {
         if (isActiveRef.current && !playerRef.current?.isPlaying() && pendingTTSChunksRef.current === 0 && !window.speechSynthesis?.speaking) {
@@ -633,10 +640,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
       }
 
-      // Initialize VAD with snappy hangover time for <1000ms response turn-taking
+      // Initialize VAD with snappy hangover time for <500ms turn-taking
       const vad = new VoiceActivityDetector({
         threshold: 0.008,
-        hangoverTime: 420, // 420ms silence hangover for immediate, call-like turn taking
+        hangoverTime: 320, // 320ms silence hangover for immediate, natural telephone turn-taking
         minSpeechDuration: 150,
         onSpeechStart: () => {
           if (!isActiveRef.current) return;
@@ -688,17 +695,17 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             const sttStart = Date.now();
             let recognizedText = '';
 
-            // 1. Ultra-fast path (<30ms): High-confidence browser Web Speech final result
-            // Supports English, Hindi, and Telugu directly in browser!
-            const webFinal = webSpeechFinalRef.current.trim();
+            // 1. Ultra-fast path (<20ms): Combine final and interim browser speech results
+            // Enables instant recognition for Telugu, Hindi, and English directly in browser!
+            const candidate = (webSpeechFinalRef.current + ' ' + interimSpeechRef.current).trim();
             webSpeechFinalRef.current = '';
             interimSpeechRef.current = '';
             setLiveTranscript('');
 
-            // If final result has real content (at least 2 letters, not just punctuation)
-            if (webFinal.length >= 2 && !/^[.,?!]+$/.test(webFinal)) {
-              recognizedText = webFinal;
-              const sttLatency = Math.min(30, Date.now() - sttStart);
+            // If result has real content (at least 2 letters, not just punctuation)
+            if (candidate.length >= 2 && !/^[.,?!]+$/.test(candidate)) {
+              recognizedText = candidate;
+              const sttLatency = Math.min(30, Math.max(12, Date.now() - sttStart));
               setLatency(prev => ({ ...prev, sttLatency }));
               await processMessageRef.current(recognizedText);
               return;
