@@ -14,6 +14,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 export interface AuthSession {
   userId: string | null;
   email: string | null;
+  token: string | null;
   business: Business | null;
   agent: Agent | null;
 }
@@ -26,6 +27,7 @@ export async function getAuthSession(request: Request): Promise<AuthSession> {
     return {
       userId: null,
       email: null,
+      token: null,
       business: null,
       agent: null,
     };
@@ -123,6 +125,7 @@ export async function getAuthSession(request: Request): Promise<AuthSession> {
     return {
       userId,
       email,
+      token,
       business,
       agent,
     };
@@ -131,6 +134,7 @@ export async function getAuthSession(request: Request): Promise<AuthSession> {
     return {
       userId: null,
       email: null,
+      token: null,
       business: null,
       agent: null,
     };

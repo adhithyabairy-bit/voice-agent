@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/db/supabase';
+import { supabaseAdmin, createScopedClient } from '@/lib/db/supabase';
 import { getAuthSession } from '@/lib/auth/session';
 import { chunkText, generateEmbedding } from '@/lib/ai/knowledge';
 import { invalidateBusinessCache } from '@/lib/services/business';
@@ -29,6 +29,10 @@ export async function POST(req: NextRequest) {
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized. Please sign in to create a business.' }, { status: 401 });
     }
+
+    // Scoped client with user JWT token if present, otherwise supabaseAdmin
+    const db = createScopedClient(session?.token);
+
     const {
       business_name,
       business_type = 'service',
@@ -60,20 +64,32 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Create Business
-    const { data: business, error: businessError } = await supabaseAdmin
+    const businessPayload = {
+      owner_id: userId,
+      business_name: business_name.trim(),
+      business_type,
+      description: description.trim(),
+      phone: phone.trim(),
+      email: email.trim() || null,
+      address: address.trim(),
+      working_hours,
+    };
+
+    let { data: business, error: businessError } = await db
       .from('businesses')
-      .insert({
-        owner_id: userId,
-        business_name: business_name.trim(),
-        business_type,
-        description: description.trim(),
-        phone: phone.trim(),
-        email: email.trim() || null,
-        address: address.trim(),
-        working_hours,
-      })
+      .insert(businessPayload)
       .select()
       .single();
+
+    if (businessError && db !== supabaseAdmin) {
+      const retry = await supabaseAdmin
+        .from('businesses')
+        .insert(businessPayload)
+        .select()
+        .single();
+      business = retry.data;
+      businessError = retry.error;
+    }
 
     if (businessError || !business) {
       console.error('Error creating business:', businessError);

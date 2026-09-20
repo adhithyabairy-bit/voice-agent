@@ -60,3 +60,17 @@ export function isSupabaseConfigured(): boolean {
     supabaseAnonKey.length > 10
   );
 }
+
+/**
+ * Creates an authenticated Supabase client using a user's JWT token.
+ * Enables RLS compliance when running on behalf of an authenticated user.
+ */
+export function createScopedClient(token?: string | null): SupabaseClient {
+  if (token) {
+    return createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+  }
+  return supabaseAdmin;
+}
