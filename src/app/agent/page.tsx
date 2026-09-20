@@ -6,7 +6,7 @@
 // ============================================================
 
 import { useState, useRef } from 'react';
-import { Send, Settings, AlertTriangle } from 'lucide-react';
+import { Send, Settings, AlertTriangle, Volume2 } from 'lucide-react';
 import { CallButton } from '@/components/voice/call-button';
 import { Waveform } from '@/components/voice/waveform';
 import { Transcript } from '@/components/voice/transcript';
@@ -90,7 +90,7 @@ export default function AgentPage() {
             </select>
           </div>
 
-          {/* Personality selector */}
+          {/* Response Style selector */}
           <div className="glass-card p-5 space-y-3">
             <label className="text-xs font-medium text-[var(--muted-foreground)]">Response Style</label>
             <div className="flex gap-2">
@@ -109,6 +109,34 @@ export default function AgentPage() {
                   {p.charAt(0).toUpperCase() + p.slice(1)}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Volume Boost Control */}
+          <div className="glass-card p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-[var(--muted-foreground)] flex items-center gap-1.5">
+                <Volume2 size={13} />
+                TTS Volume Boost
+              </label>
+              <span className="text-xs font-mono font-medium text-[var(--primary)]">
+                {Math.round(voiceAgent.volumeBoost * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0.5"
+              max="2.5"
+              step="0.1"
+              value={voiceAgent.volumeBoost}
+              onChange={(e) => voiceAgent.setVolumeBoost(parseFloat(e.target.value))}
+              className="w-full accent-[var(--primary)] cursor-pointer h-1.5 bg-[var(--muted)] rounded-lg"
+              id="volume-boost-slider"
+            />
+            <div className="flex justify-between text-[10px] text-[var(--muted-foreground)]">
+              <span>Normal (100%)</span>
+              <span>Boosted (180%)</span>
+              <span>Max (250%)</span>
             </div>
           </div>
 
@@ -181,16 +209,23 @@ export default function AgentPage() {
 
             {/* Live speech feedback & manual send button */}
             {voiceAgent.callState === 'listening' && (
-              <div className="flex flex-col items-center gap-2 animate-fade-in">
-                <div
-                  className={`text-xs px-3.5 py-1.5 rounded-full font-medium transition-all ${
-                    voiceAgent.isSpeakingDetected
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
-                      : 'bg-blue-50 text-blue-700 border border-blue-200'
-                  }`}
-                >
-                  {voiceAgent.isSpeakingDetected ? '🎙️ Hearing your voice... Speak naturally' : '👂 Listening for your voice...'}
-                </div>
+              <div className="flex flex-col items-center gap-2 animate-fade-in max-w-lg text-center">
+                {voiceAgent.liveTranscript ? (
+                  <div className="text-xs px-4 py-2 rounded-full font-medium bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-sm animate-pulse">
+                    🎙️ &ldquo;{voiceAgent.liveTranscript}&rdquo;
+                  </div>
+                ) : (
+                  <div
+                    className={`text-xs px-3.5 py-1.5 rounded-full font-medium transition-all ${
+                      voiceAgent.isSpeakingDetected
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
+                        : 'bg-blue-50 text-blue-700 border border-blue-200'
+                    }`}
+                  >
+                    {voiceAgent.isSpeakingDetected ? '🎙️ Hearing your voice... Speak naturally' : '👂 Listening for your voice...'}
+                  </div>
+                )}
+
                 {voiceAgent.isSpeakingDetected && (
                   <button
                     onClick={voiceAgent.stopSpeakingAndSend}
@@ -204,6 +239,13 @@ export default function AgentPage() {
               </div>
             )}
 
+            {/* Unclear speech feedback notice */}
+            {voiceAgent.feedbackNotice && (
+              <div className="text-xs px-3.5 py-1.5 rounded-full font-medium bg-amber-50 text-amber-800 border border-amber-300 animate-fade-in">
+                ℹ️ {voiceAgent.feedbackNotice}
+              </div>
+            )}
+
             {/* Error display */}
             {voiceAgent.error && (
               <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm max-w-md text-center">
@@ -213,8 +255,8 @@ export default function AgentPage() {
             )}
           </div>
 
-          {/* Transcript area */}
-          <div className="border-t border-[var(--border)] p-5 max-h-96 overflow-y-auto">
+          {/* Transcript area (clean container without duplicate nested scrollbars) */}
+          <div className="border-t border-[var(--border)] p-4">
             <Transcript
               messages={voiceAgent.messages}
               isProcessing={voiceAgent.callState === 'processing'}

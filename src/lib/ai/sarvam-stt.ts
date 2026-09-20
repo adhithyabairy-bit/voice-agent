@@ -2,6 +2,7 @@
 // Sarvam Speech-to-Text Service
 // Uses Sarvam's saaras:v3 model for Indian language ASR.
 // Endpoint: POST https://api.sarvam.ai/speech-to-text
+// Supports WAV (16kHz PCM recommended) and WebM.
 // ============================================================
 
 const SARVAM_STT_URL = 'https://api.sarvam.ai/speech-to-text';
@@ -21,8 +22,8 @@ export interface STTResult {
 /**
  * Transcribe audio using Sarvam's STT API.
  *
- * @param audioBlob - Audio data as a Blob or Buffer
- * @param languageCode - Optional BCP-47 language hint (e.g., 'te-IN')
+ * @param audioBlob - Audio data as a Blob or Buffer (WAV/WebM)
+ * @param languageCode - Optional BCP-47 language hint (e.g., 'te-IN', 'hi-IN', 'en-IN')
  * @returns Transcription result with detected language
  */
 export async function transcribeAudio(
@@ -36,18 +37,26 @@ export async function transcribeAudio(
 
   const formData = new FormData();
 
-  // Handle both Blob and Buffer inputs
+  // Detect whether audio is WAV (preferred 16kHz) or WebM
+  const isWav =
+    (typeof Blob !== 'undefined' && audioBlob instanceof Blob && audioBlob.type.includes('wav')) ||
+    (Buffer.isBuffer(audioBlob) && audioBlob.subarray(0, 4).toString() === 'RIFF');
+
+  const fileName = isWav ? 'recording.wav' : 'recording.webm';
+  const mimeType = isWav ? 'audio/wav' : 'audio/webm';
+
   if (Buffer.isBuffer(audioBlob)) {
     const uint8 = new Uint8Array(audioBlob);
-    formData.append('file', new Blob([uint8], { type: 'audio/webm' }), 'audio.webm');
+    formData.append('file', new Blob([uint8], { type: mimeType }), fileName);
   } else {
-    formData.append('file', audioBlob, 'audio.webm');
+    formData.append('file', audioBlob, fileName);
   }
 
   formData.append('model', 'saaras:v3');
   formData.append('mode', 'transcribe');
 
-  if (languageCode) {
+  // Provide language hint if explicitly specified and not auto/unknown
+  if (languageCode && languageCode !== 'unknown' && languageCode !== 'auto') {
     formData.append('language_code', languageCode);
   }
 

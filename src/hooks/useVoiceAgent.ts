@@ -2,15 +2,21 @@
 
 // ============================================================
 // useVoiceAgent — Main orchestration hook for the voice pipeline
-// Manages: mic → VAD → record → STT → LLM → TTS → playback
-// Supports barge-in, interruption, and conversation memory.
+// Manages: mic → VAD/WebSpeech → record → STT → LLM (streaming)
+//         → Real-time sentence chunking → TTS stream → playback
+// Features:
+// - Real-time word-by-word streaming transcript
+// - Sentence-by-sentence streaming TTS (plays sentence 1 while LLM generates sentence 2)
+// - Web Audio GainNode & DynamicsCompressor for amplified, crystal clear audio
+// - Dual-pipeline STT (Web Speech API + Sarvam STT fallback)
+// - Barge-in / interruption with instant queue flush
 // ============================================================
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { AudioRecorder } from '@/lib/audio/recorder';
 import { AudioPlayer } from '@/lib/audio/player';
 import { VoiceActivityDetector } from '@/lib/audio/vad';
-import type { CallState, LanguageCode, LatencyMetrics, Message } from '@/types';
+import type { CallState, LanguageCode, LatencyMetrics } from '@/types';
 
 interface VoiceAgentOptions {
   language: LanguageCode;
@@ -36,6 +42,70 @@ interface VoiceAgentReturn {
   conversationId: string | null;
   error: string | null;
   isDemo: boolean;
+  liveTranscript: string;
+  volumeBoost: number;
+  setVolumeBoost: (vol: number) => void;
+  feedbackNotice: string | null;
+}
+
+interface BrowserSpeechRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: unknown) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+  onend: (() => void) | null;
+}
+
+/**
+ * Splits streamed text buffer into ready-to-speak sentence/clause chunks.
+ * Handles English, Telugu, and Hindi punctuation.
+ */
+function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: string } {
+  const chunks: string[] = [];
+  let remaining = buffer;
+
+  while (remaining.length > 0) {
+    // 1. Look for full sentence terminators (. ? ! । \n)
+    const sentenceMatch = remaining.match(/^([\s\S]*?[.?!।\n]+)(\s+|$)([\s\S]*)/);
+    if (sentenceMatch) {
+      const chunk = sentenceMatch[1].trim();
+      remaining = sentenceMatch[3];
+      if (chunk.length > 0) {
+        chunks.push(chunk);
+      }
+      continue;
+    }
+
+    // 2. Look for natural clause pause (, ; :) if at least 4 words have accumulated
+    const words = remaining.trim().split(/\s+/);
+    if (words.length >= 4) {
+      const clauseMatch = remaining.match(/^([\s\S]*?[,;:]+)(\s+|$)([\s\S]*)/);
+      if (clauseMatch) {
+        const chunk = clauseMatch[1].trim();
+        remaining = clauseMatch[3];
+        if (chunk.length > 0) {
+          chunks.push(chunk);
+        }
+        continue;
+      }
+    }
+
+    // 3. Fallback: if over 10 words accumulated without punctuation, split at word 8
+    if (words.length >= 10) {
+      const chunk = words.slice(0, 8).join(' ');
+      remaining = words.slice(8).join(' ');
+      chunks.push(chunk);
+      continue;
+    }
+
+    break;
+  }
+
+  return { chunks, remaining };
 }
 
 export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
@@ -52,67 +122,157 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [volumeBoost, setVolumeBoostState] = useState(1.8);
+  const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
 
-  // Refs for mutable state that shouldn't trigger re-renders
+  // Refs for audio components and pipeline coordination
   const recorderRef = useRef<AudioRecorder | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
   const vadRef = useRef<VoiceActivityDetector | null>(null);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const callStartTimeRef = useRef<number>(0);
   const isActiveRef = useRef(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanup();
-    };
+  // Web Speech API accumulation
+  const webSpeechFinalRef = useRef('');
+
+  // Volume boost setter
+  const setVolumeBoost = useCallback((vol: number) => {
+    setVolumeBoostState(vol);
+    playerRef.current?.setVolume(vol);
   }, []);
 
-  const cleanup = useCallback(() => {
-    isActiveRef.current = false;
-    abortControllerRef.current?.abort();
-    vadRef.current?.destroy();
-    recorderRef.current?.destroy();
-    playerRef.current?.destroy();
-    vadRef.current = null;
-    recorderRef.current = null;
-    playerRef.current = null;
-  }, []);
-
-  /**
-   * Update call state and notify listener.
-   */
   const updateState = useCallback((newState: CallState) => {
     setCallState(newState);
     optionsRef.current.onStateChange?.(newState);
   }, []);
 
-  /**
-   * Add a message to the conversation.
-   */
-  const addMessage = useCallback((role: 'user' | 'assistant', content: string) => {
-    const msg = { role, content, timestamp: Date.now() };
-    setMessages(prev => [...prev, msg]);
-    optionsRef.current.onTranscript?.(content, role);
+  const cleanup = useCallback(() => {
+    isActiveRef.current = false;
+    abortControllerRef.current?.abort();
+
+    try {
+      speechRecognitionRef.current?.abort();
+    } catch {
+      // Ignore
+    }
+    speechRecognitionRef.current = null;
+
+    vadRef.current?.destroy();
+    recorderRef.current?.destroy();
+    playerRef.current?.destroy();
+
+    vadRef.current = null;
+    recorderRef.current = null;
+    playerRef.current = null;
   }, []);
 
+  useEffect(() => {
+    return () => {
+      cleanup();
+    };
+  }, [cleanup]);
+
   /**
-   * Process a user message through the AI pipeline.
+   * Helper to append an audio chunk to the player queue via /api/voice/tts.
+   */
+  const synthesizeAndQueueChunk = useCallback(async (textChunk: string) => {
+    if (!textChunk.trim() || !isActiveRef.current) return;
+
+    try {
+      const ttsResponse = await fetch('/api/voice/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: textChunk,
+          language: optionsRef.current.language,
+          voice: optionsRef.current.voice,
+        }),
+        signal: abortControllerRef.current?.signal,
+      });
+
+      if (!isActiveRef.current) return;
+
+      const ttsContentType = ttsResponse.headers.get('content-type') || '';
+      if (ttsResponse.ok && ttsContentType.includes('audio')) {
+        const audioData = await ttsResponse.arrayBuffer();
+        if (isActiveRef.current && playerRef.current) {
+          // Pause VAD while speaking to prevent self-listening
+          vadRef.current?.pause();
+          await playerRef.current.enqueueAudio(audioData);
+        }
+      } else {
+        // Fallback: browser SpeechSynthesis
+        let speechText = textChunk;
+        try {
+          const respData = await ttsResponse.json();
+          if (respData.mode === 'demo') setIsDemo(true);
+          if (respData.text) speechText = respData.text;
+        } catch {
+          // Ignore
+        }
+
+        if ('speechSynthesis' in window && isActiveRef.current) {
+          vadRef.current?.pause();
+          const utterance = new SpeechSynthesisUtterance(speechText);
+          utterance.lang = optionsRef.current.language.replace('-IN', '');
+          utterance.volume = 1.0;
+          utterance.rate = 1.0;
+
+          utterance.onend = () => {
+            if (isActiveRef.current && !playerRef.current?.isPlaying()) {
+              try {
+                recorderRef.current?.startRecording();
+              } catch {
+                // Ignore
+              }
+              vadRef.current?.resume();
+              updateState('listening');
+            }
+          };
+
+          window.speechSynthesis.speak(utterance);
+        }
+      }
+    } catch (err: unknown) {
+      if ((err as Error).name !== 'AbortError') {
+        console.warn('TTS streaming chunk error:', err);
+      }
+    }
+  }, [updateState]);
+
+  /**
+   * Process a user message through streaming LLM & sentence-chunked TTS.
    */
   const processMessage = useCallback(async (text: string, fromText = false) => {
     if (!isActiveRef.current && !fromText) return;
 
     updateState('processing');
-    addMessage('user', text);
+    setError(null);
+    setLiveTranscript('');
+
+    // Append user message
+    const userMsg = { role: 'user' as const, content: text, timestamp: Date.now() };
+    setMessages(prev => [...prev, userMsg]);
+    optionsRef.current.onTranscript?.(text, 'user');
 
     const totalStart = Date.now();
 
     try {
-      // Cancel any previous pending request
+      // Cancel any existing in-flight operations
       abortControllerRef.current?.abort();
       abortControllerRef.current = new AbortController();
+
+      // Create empty assistant message placeholder for real-time streaming
+      const assistantMsgTime = Date.now();
+      setMessages(prev => [
+        ...prev,
+        { role: 'assistant' as const, content: '', timestamp: assistantMsgTime },
+      ]);
 
       // --- LLM Call (streaming) ---
       const chatResponse = await fetch('/api/voice/chat', {
@@ -134,96 +294,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         throw new Error(`Chat API error: ${chatResponse.status}`);
       }
 
-      // Check if it's a demo JSON response (non-streaming)
-      const contentType = chatResponse.headers.get('content-type') || '';
-      let fullResponse = '';
-
-      if (contentType.includes('application/json')) {
-        const jsonData = await chatResponse.json();
-        fullResponse = jsonData.content;
-        if (jsonData.mode === 'demo') setIsDemo(true);
-      } else {
-        // Parse streaming NDJSON response
-        const reader = chatResponse.body?.getReader();
-        const decoder = new TextDecoder();
-
-        if (reader) {
-          let buffer = '';
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const parsed = JSON.parse(line);
-                if (parsed.type === 'content') {
-                  fullResponse += parsed.content;
-                } else if (parsed.type === 'latency') {
-                  setLatency(prev => ({
-                    ...prev,
-                    llmFirstTokenLatency: parsed.firstTokenLatency,
-                  }));
-                }
-              } catch {
-                // Skip malformed lines
-              }
-            }
-          }
-        }
-      }
-
-      if (!fullResponse || !isActiveRef.current) return;
-
-      addMessage('assistant', fullResponse);
-
-      // --- TTS Call ---
-      updateState('speaking');
-      const ttsStart = Date.now();
-
-      const ttsResponse = await fetch('/api/voice/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: fullResponse,
-          language: optionsRef.current.language,
-          voice: optionsRef.current.voice,
-        }),
-        signal: abortControllerRef.current.signal,
-      });
-
-      const ttsLatency = Date.now() - ttsStart;
-      const totalLatency = Date.now() - totalStart;
-
-      setLatency(prev => ({
-        ...prev,
-        ttsLatency: ttsLatency,
-        totalResponseLatency: totalLatency,
-      }));
-      optionsRef.current.onLatencyUpdate?.({
-        ...latency,
-        ttsLatency,
-        totalResponseLatency: totalLatency,
-      });
-
-      if (!isActiveRef.current) return;
-
-      // Check if TTS returned audio or demo/error
-      const ttsContentType = ttsResponse.headers.get('content-type') || '';
-
-      if (ttsResponse.ok && ttsContentType.includes('audio')) {
-        // Real audio — play it
-        const audioData = await ttsResponse.arrayBuffer();
-        
-        // Pause VAD while speaking to prevent self-listening
-        vadRef.current?.pause();
-
-        await playerRef.current?.playAudio(audioData, () => {
-          // Audio finished playing — resume listening and restart recorder
+      // Prepare AudioPlayer completion hook
+      if (playerRef.current) {
+        playerRef.current.onQueueDrained(() => {
           if (isActiveRef.current) {
             try {
               recorderRef.current?.startRecording();
@@ -234,71 +307,133 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             updateState('listening');
           }
         });
+      }
+
+      const contentType = chatResponse.headers.get('content-type') || '';
+      let fullResponse = '';
+      let streamBuffer = '';
+
+      if (contentType.includes('application/json')) {
+        // Non-streaming fallback
+        const jsonData = await chatResponse.json();
+        fullResponse = jsonData.content;
+        if (jsonData.mode === 'demo') setIsDemo(true);
+
+        setMessages(prev => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+            updated[lastIdx] = { ...updated[lastIdx], content: fullResponse };
+          }
+          return updated;
+        });
+
+        // Single chunk synthesize
+        updateState('speaking');
+        await synthesizeAndQueueChunk(fullResponse);
       } else {
-        // Demo mode or TTS fallback — use browser SpeechSynthesis
-        let speechText = fullResponse;
-        try {
-          const respData = await ttsResponse.json();
-          if (respData.mode === 'demo') setIsDemo(true);
-          if (respData.text) speechText = respData.text;
-        } catch {
-          // Ignore
-        }
+        // Streaming NDJSON response
+        const reader = chatResponse.body?.getReader();
+        const decoder = new TextDecoder();
 
-        if ('speechSynthesis' in window) {
-          const utterance = new SpeechSynthesisUtterance(speechText);
-          utterance.lang = optionsRef.current.language.replace('-IN', '');
-          utterance.rate = 1.0;
+        if (reader) {
+          let lineBuffer = '';
 
-          utterance.onend = () => {
-            if (isActiveRef.current) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            lineBuffer += decoder.decode(value, { stream: true });
+            const lines = lineBuffer.split('\n');
+            lineBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
               try {
-                recorderRef.current?.startRecording();
-              } catch {
-                // Ignore
-              }
-              vadRef.current?.resume();
-              updateState('listening');
-            }
-          };
+                const parsed = JSON.parse(line);
 
-          utterance.onerror = () => {
-            if (isActiveRef.current) {
-              try {
-                recorderRef.current?.startRecording();
-              } catch {
-                // Ignore
-              }
-              vadRef.current?.resume();
-              updateState('listening');
-            }
-          };
+                if (parsed.type === 'content') {
+                  const token = parsed.content;
+                  fullResponse += token;
+                  streamBuffer += token;
 
-          vadRef.current?.pause();
-          speechSynthesis.speak(utterance);
-        } else {
-          // No TTS at all — return to listening
-          setTimeout(() => {
-            if (isActiveRef.current) {
-              try {
-                recorderRef.current?.startRecording();
+                  // Update UI message word-by-word
+                  setMessages(prev => {
+                    const updated = [...prev];
+                    const lastIdx = updated.length - 1;
+                    if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                      updated[lastIdx] = {
+                        ...updated[lastIdx],
+                        content: updated[lastIdx].content + token,
+                      };
+                    }
+                    return updated;
+                  });
+
+                  // Check if a complete sentence or clause has formed
+                  const { chunks, remaining } = extractSpeechChunks(streamBuffer);
+                  streamBuffer = remaining;
+
+                  if (chunks.length > 0) {
+                    updateState('speaking');
+                    for (const chunk of chunks) {
+                      // Fire-and-forget chunk synthesis; chunks queue inside AudioPlayer
+                      synthesizeAndQueueChunk(chunk);
+                    }
+                  }
+                } else if (parsed.type === 'latency') {
+                  setLatency(prev => ({
+                    ...prev,
+                    llmFirstTokenLatency: parsed.firstTokenLatency,
+                  }));
+                }
               } catch {
-                // Ignore
+                // Ignore parse errors on partial chunks
               }
-              vadRef.current?.resume();
-              updateState('listening');
             }
-          }, 1000);
+          }
+
+          // Flush any remaining text at the end of the stream
+          if (streamBuffer.trim().length > 0 && isActiveRef.current) {
+            updateState('speaking');
+            await synthesizeAndQueueChunk(streamBuffer.trim());
+          }
         }
       }
+
+      if (fullResponse) {
+        optionsRef.current.onTranscript?.(fullResponse, 'assistant');
+      }
+
+      const totalLatency = Date.now() - totalStart;
+      setLatency(prev => ({
+        ...prev,
+        totalResponseLatency: totalLatency,
+      }));
+      optionsRef.current.onLatencyUpdate?.({
+        ...latency,
+        totalResponseLatency: totalLatency,
+      });
+
+      // If audio player is not playing anything (e.g. silent or demo fallback finished), revert to listening
+      setTimeout(() => {
+        if (isActiveRef.current && !playerRef.current?.isPlaying() && !window.speechSynthesis?.speaking) {
+          try {
+            recorderRef.current?.startRecording();
+          } catch {
+            // Ignore
+          }
+          vadRef.current?.resume();
+          updateState('listening');
+        }
+      }, 800);
     } catch (err: unknown) {
-      if ((err as Error).name === 'AbortError') return; // Expected on interruption
+      if ((err as Error).name === 'AbortError') return;
       const errorMsg = (err as Error).message || 'An error occurred';
       console.error('Voice pipeline error:', errorMsg);
       setError(errorMsg);
       optionsRef.current.onError?.(errorMsg);
 
-      // Try to recover
       if (isActiveRef.current) {
         setTimeout(() => {
           if (isActiveRef.current) {
@@ -313,7 +448,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }, 1500);
       }
     }
-  }, [messages, latency, updateState, addMessage]);
+  }, [messages, latency, updateState, synthesizeAndQueueChunk]);
 
   /**
    * Start a voice call session.
@@ -323,16 +458,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       setError(null);
       setMessages([]);
       setIsSpeakingDetected(false);
+      setLiveTranscript('');
+      setFeedbackNotice(null);
       updateState('connecting');
 
       // Initialize audio components
       const recorder = new AudioRecorder();
       const player = new AudioPlayer();
+      player.setVolume(volumeBoost);
 
       recorderRef.current = recorder;
       playerRef.current = player;
 
-      // Request mic permission and get stream
+      // Request mic permission and initialize stream
       const stream = await recorder.initialize();
       player.initialize();
 
@@ -342,13 +480,77 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            language: options.language,
+            language: optionsRef.current.language,
           }),
         });
         const sessionData = await sessionResp.json();
         setConversationId(sessionData.conversationId);
       } catch {
         setConversationId(`local-${Date.now()}`);
+      }
+
+      // Initialize Web Speech API if supported in browser for instant zero-latency recognition
+      if (typeof window !== 'undefined') {
+        const win = window as unknown as {
+          SpeechRecognition?: new () => BrowserSpeechRecognition;
+          webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+        };
+        const SpeechRecClass = win.SpeechRecognition || win.webkitSpeechRecognition;
+
+        if (SpeechRecClass) {
+          try {
+            const recognition = new SpeechRecClass();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = optionsRef.current.language;
+
+            recognition.onresult = (event: unknown) => {
+              const recEvent = event as {
+                resultIndex: number;
+                results: Array<Array<{ transcript: string }> & { isFinal: boolean }>;
+              };
+
+              let interim = '';
+              let final = '';
+
+              for (let i = recEvent.resultIndex; i < recEvent.results.length; ++i) {
+                const transcriptPiece = recEvent.results[i][0].transcript;
+                if (recEvent.results[i].isFinal) {
+                  final += transcriptPiece;
+                } else {
+                  interim += transcriptPiece;
+                }
+              }
+
+              if (interim) {
+                setLiveTranscript(interim);
+              }
+              if (final) {
+                webSpeechFinalRef.current = (webSpeechFinalRef.current + ' ' + final).trim();
+                setLiveTranscript(webSpeechFinalRef.current);
+              }
+            };
+
+            recognition.onerror = () => {
+              // Non-fatal, falls back to Sarvam STT
+            };
+
+            recognition.onend = () => {
+              if (isActiveRef.current && speechRecognitionRef.current) {
+                try {
+                  recognition.start();
+                } catch {
+                  // Ignore
+                }
+              }
+            };
+
+            recognition.start();
+            speechRecognitionRef.current = recognition;
+          } catch {
+            // Ignore if speech recognition blocked
+          }
+        }
       }
 
       // Initialize VAD with sensitive threshold & adaptive noise
@@ -359,13 +561,18 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         onSpeechStart: () => {
           if (!isActiveRef.current) return;
           setIsSpeakingDetected(true);
+          setFeedbackNotice(null);
 
-          // BARGE-IN: If AI is speaking, interrupt it immediately
+          // BARGE-IN: If AI is speaking, interrupt immediately and flush queue
           if (playerRef.current?.isPlaying()) {
             playerRef.current.stopAudio();
             abortControllerRef.current?.abort();
-            speechSynthesis?.cancel();
+            window.speechSynthesis?.cancel();
           }
+
+          // Discard leading silence so Sarvam STT receives only active speech
+          recorderRef.current?.resetChunks();
+          webSpeechFinalRef.current = '';
 
           // Ensure recorder is active
           if (!recorderRef.current?.isRecording()) {
@@ -379,61 +586,58 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         },
         onSpeechEnd: async () => {
           setIsSpeakingDetected(false);
-          if (!isActiveRef.current || !recorderRef.current?.isRecording()) return;
+          if (!isActiveRef.current) return;
 
           try {
-            // Stop recording and get audio blob
-            const audioBlob = await recorderRef.current.stopRecording();
+            // Check if Web Speech API captured text
+            let recognizedText = webSpeechFinalRef.current.trim();
+            webSpeechFinalRef.current = '';
+            setLiveTranscript('');
 
-            // Ignore tiny click/pop audio blobs (< 1200 bytes)
-            if (audioBlob.size < 1200) {
-              if (isActiveRef.current) {
+            // If Web Speech API didn't produce text, fall back to Sarvam STT
+            if (!recognizedText && recorderRef.current) {
+              const audioBlob = await recorderRef.current.stopRecording();
+
+              if (audioBlob.size > 200) {
+                updateState('processing');
+
+                const sttStart = Date.now();
+                const formData = new FormData();
+                const isWav = audioBlob.type.includes('wav');
+                formData.append('audio', audioBlob, isWav ? 'recording.wav' : 'recording.webm');
+                formData.append('language', optionsRef.current.language);
+
                 try {
-                  recorderRef.current?.startRecording();
-                } catch {
-                  // Ignore
+                  const sttResponse = await fetch('/api/voice/stt', {
+                    method: 'POST',
+                    body: formData,
+                  });
+
+                  if (sttResponse.ok) {
+                    const sttData = await sttResponse.json();
+                    const sttLatency = Date.now() - sttStart;
+                    setLatency(prev => ({ ...prev, sttLatency }));
+
+                    if (sttData.transcript && sttData.transcript.trim()) {
+                      recognizedText = sttData.transcript.trim();
+                    }
+                  } else {
+                    const errText = await sttResponse.text();
+                    console.error('STT API failed:', sttResponse.status, errText);
+                  }
+                } catch (fetchErr) {
+                  console.error('STT fetch exception:', fetchErr);
                 }
-                updateState('listening');
               }
-              return;
             }
 
-            updateState('processing');
-
-            // Send to STT
-            const sttStart = Date.now();
-            const formData = new FormData();
-            formData.append('audio', audioBlob, 'recording.webm');
-            formData.append('language', optionsRef.current.language);
-
-            const sttResponse = await fetch('/api/voice/stt', {
-              method: 'POST',
-              body: formData,
-            });
-
-            if (!sttResponse.ok) {
-              console.warn('STT API returned error status:', sttResponse.status);
-              if (isActiveRef.current) {
-                try {
-                  recorderRef.current?.startRecording();
-                } catch {
-                  // Ignore
-                }
-                updateState('listening');
-              }
-              return;
-            }
-
-            const sttData = await sttResponse.json();
-            const sttLatency = Date.now() - sttStart;
-
-            setLatency(prev => ({ ...prev, sttLatency }));
-
-            if (sttData.transcript && sttData.transcript.trim()) {
-              // Process the transcribed message
-              await processMessage(sttData.transcript);
+            if (recognizedText) {
+              await processMessage(recognizedText);
             } else {
-              // No speech transcribed
+              // No clear speech detected (e.g. ambient noise or click)
+              setFeedbackNotice('Could not catch your voice. Please speak again.');
+              setTimeout(() => setFeedbackNotice(null), 3000);
+
               if (isActiveRef.current) {
                 try {
                   recorderRef.current?.startRecording();
@@ -444,7 +648,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               }
             }
           } catch (err: unknown) {
-            console.error('Recording processing error:', err);
+            console.error('Audio processing error:', err);
             if (isActiveRef.current) {
               try {
                 recorderRef.current?.startRecording();
@@ -464,7 +668,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       vadRef.current = vad;
       vad.start(stream);
 
-      // Start recording immediately so the user's first word is never missed
+      // Start recording immediately
       try {
         recorder.startRecording();
       } catch {
@@ -475,7 +679,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       callStartTimeRef.current = Date.now();
       updateState('listening');
 
-      // Check if we're in demo mode
+      // Check demo mode
       try {
         const agentResp = await fetch('/api/agent');
         const agentData = await agentResp.json();
@@ -491,7 +695,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       optionsRef.current.onError?.(errorMsg);
       updateState('error');
     }
-  }, [options.language, updateState, processMessage]);
+  }, [updateState, processMessage, volumeBoost]);
 
   /**
    * End the voice call.
@@ -499,13 +703,21 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const endCall = useCallback(async () => {
     isActiveRef.current = false;
     updateState('ended');
+    setLiveTranscript('');
+    setFeedbackNotice(null);
 
-    // Stop all audio
+    // Stop all audio & recognition
     playerRef.current?.stopAudio();
-    speechSynthesis?.cancel();
+    window.speechSynthesis?.cancel();
     abortControllerRef.current?.abort();
 
-    // Stop recording if active
+    try {
+      speechRecognitionRef.current?.abort();
+    } catch {
+      // Ignore
+    }
+    speechRecognitionRef.current = null;
+
     if (recorderRef.current?.isRecording()) {
       try {
         await recorderRef.current.stopRecording();
@@ -514,7 +726,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       }
     }
 
-    // Generate summary
+    // Save conversation summary
     if (conversationId && messages.length > 0) {
       try {
         await fetch('/api/conversations', {
@@ -523,7 +735,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           body: JSON.stringify({
             conversationId,
             messages: messages.map(m => ({ role: m.role, content: m.content })),
-            language: options.language,
+            language: optionsRef.current.language,
             startTime: callStartTimeRef.current,
           }),
         });
@@ -533,7 +745,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     }
 
     cleanup();
-  }, [conversationId, messages, options.language, updateState, cleanup]);
+  }, [conversationId, messages, updateState, cleanup]);
 
   /**
    * Send a text message (fallback when voice is unavailable).
@@ -541,13 +753,12 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const sendTextMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
 
-    // Temporarily activate so processMessage and TTS playback work
     const wasActive = isActiveRef.current;
     isActiveRef.current = true;
 
-    // Initialize audio player if needed for TTS playback
     if (!playerRef.current) {
       const player = new AudioPlayer();
+      player.setVolume(volumeBoost);
       playerRef.current = player;
       player.initialize();
     }
@@ -555,9 +766,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     try {
       await processMessage(text.trim(), true);
     } finally {
-      // Restore original active state if no call is running
       if (!wasActive) {
-        // Keep active until TTS finishes, then reset
         const checkAndReset = () => {
           if (!playerRef.current?.isPlaying() && !window.speechSynthesis?.speaking) {
             isActiveRef.current = wasActive;
@@ -569,7 +778,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         setTimeout(checkAndReset, 500);
       }
     }
-  }, [processMessage]);
+  }, [processMessage, volumeBoost]);
 
   /**
    * Manually finish speaking and trigger processing immediately.
@@ -593,5 +802,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     conversationId,
     error,
     isDemo,
+    liveTranscript,
+    volumeBoost,
+    setVolumeBoost,
+    feedbackNotice,
   };
 }

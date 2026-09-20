@@ -1,17 +1,29 @@
 // ============================================================
 // Audio Recorder
-// Browser audio recording using MediaRecorder API.
-// Records audio as WebM/Opus for efficient upload.
+// Captures audio directly via Web Audio API into 16kHz 16-bit Mono WAV.
+// - 100% standard WAV format with proper RIFF header (ideal for Sarvam STT)
+// - Rolling pre-speech buffer (~350ms) to capture speech onset consonants
+// - Automatic downsampling to 16,000 Hz
+// - Fallback to MediaRecorder if AudioContext is restricted
 // ============================================================
 
 export class AudioRecorder {
-  private mediaRecorder: MediaRecorder | null = null;
-  private audioChunks: Blob[] = [];
   private stream: MediaStream | null = null;
+  private audioContext: AudioContext | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
+
+  private isRecordingState = false;
+  private preSpeechBuffer: Float32Array[] = [];
+  private recordedChunks: Float32Array[] = [];
+  private maxPreSpeechChunks = 4; // ~350ms buffer at 4096 buffer size
+
+  // MediaRecorder fallback
+  private mediaRecorder: MediaRecorder | null = null;
+  private mediaRecorderChunks: Blob[] = [];
 
   /**
    * Request microphone permission and initialize the stream.
-   * @returns The MediaStream (useful for VAD/visualization)
    */
   async initialize(): Promise<MediaStream> {
     try {
@@ -20,9 +32,10 @@ export class AudioRecorder {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 16000,
         },
       });
+
+      this.setupWebAudioCapture();
       return this.stream;
     } catch (error: unknown) {
       const err = error as Error;
@@ -37,14 +50,237 @@ export class AudioRecorder {
   }
 
   /**
+   * Set up Web Audio PCM capture pipeline for 16kHz WAV encoding.
+   */
+  private setupWebAudioCapture(): void {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.audioContext = new AudioCtx();
+
+      // Use 4096 buffer size (~85ms chunks at 48kHz)
+      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      this.source = this.audioContext.createMediaStreamSource(this.stream!);
+
+      this.processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        const copy = new Float32Array(inputData);
+
+        if (!this.isRecordingState) {
+          // Keep a rolling pre-speech buffer of the last ~350ms
+          this.preSpeechBuffer.push(copy);
+          if (this.preSpeechBuffer.length > this.maxPreSpeechChunks) {
+            this.preSpeechBuffer.shift();
+          }
+        } else {
+          // Actively recording user speech
+          this.recordedChunks.push(copy);
+        }
+      };
+
+      this.source.connect(this.processor);
+      // Connect to a silent destination to keep the processor running in Chrome
+      this.processor.connect(this.audioContext.destination);
+    } catch (err) {
+      console.warn('Web Audio capture failed, falling back to MediaRecorder:', err);
+      this.setupMediaRecorderFallback();
+    }
+  }
+
+  /**
+   * MediaRecorder fallback for browsers that restrict ScriptProcessor.
+   */
+  private setupMediaRecorderFallback(): void {
+    if (!this.stream) return;
+    try {
+      let mimeType = 'audio/webm';
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      }
+
+      this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
+      this.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          this.mediaRecorderChunks.push(e.data);
+        }
+      };
+    } catch {
+      // Ignore
+    }
+  }
+
+  /**
    * Start recording audio.
    */
   startRecording(): void {
-    if (!this.stream) {
-      throw new Error('Recorder not initialized. Call initialize() first.');
+    if (this.audioContext?.state === 'suspended') {
+      this.audioContext.resume();
     }
 
-    // Stop any existing recorder instance cleanly
+    this.isRecordingState = true;
+    this.recordedChunks = [];
+
+    // Fallback MediaRecorder
+    if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+      this.mediaRecorderChunks = [];
+      try {
+        this.mediaRecorder.start(100);
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  /**
+   * Reset chunks (kept for backwards compatibility).
+   */
+  resetChunks(): void {
+    this.recordedChunks = [];
+  }
+
+  /**
+   * Stop recording and return a 16kHz 16-bit Mono WAV audio blob.
+   */
+  async stopRecording(): Promise<Blob> {
+    this.isRecordingState = false;
+
+    // Use Web Audio PCM WAV if chunks were captured
+    if (this.audioContext && this.recordedChunks.length > 0) {
+      const allChunks = [...this.preSpeechBuffer, ...this.recordedChunks];
+      this.preSpeechBuffer = [];
+      this.recordedChunks = [];
+
+      // Calculate total sample length
+      let totalLength = 0;
+      for (const chunk of allChunks) {
+        totalLength += chunk.length;
+      }
+
+      // Merge into single Float32Array
+      const merged = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of allChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Downsample to 16,000 Hz if necessary
+      const inputSampleRate = this.audioContext.sampleRate || 48000;
+      const targetSampleRate = 16000;
+      const samples16k = this.downsample(merged, inputSampleRate, targetSampleRate);
+
+      // Encode into WAV
+      const wavBytes = this.encodeWAV(samples16k, targetSampleRate);
+      return new Blob([wavBytes], { type: 'audio/wav' });
+    }
+
+    // Fallback to MediaRecorder if PCM not available
+    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+      return new Promise((resolve) => {
+        this.mediaRecorder!.onstop = () => {
+          const blob = new Blob(this.mediaRecorderChunks, {
+            type: this.mediaRecorder?.mimeType || 'audio/webm',
+          });
+          this.mediaRecorderChunks = [];
+          resolve(blob);
+        };
+        this.mediaRecorder!.stop();
+      });
+    }
+
+    // Return empty audio/wav if nothing recorded
+    return new Blob([], { type: 'audio/wav' });
+  }
+
+  /**
+   * Downsample audio buffer to 16,000 Hz.
+   */
+  private downsample(buffer: Float32Array, inputRate: number, outputRate: number): Float32Array {
+    if (outputRate === inputRate || outputRate > inputRate) return buffer;
+    const ratio = inputRate / outputRate;
+    const newLength = Math.round(buffer.length / ratio);
+    const result = new Float32Array(newLength);
+
+    for (let i = 0; i < newLength; i++) {
+      const start = Math.round(i * ratio);
+      const end = Math.round((i + 1) * ratio);
+      let sum = 0;
+      let count = 0;
+      for (let j = start; j < end && j < buffer.length; j++) {
+        sum += buffer[j];
+        count++;
+      }
+      result[i] = count > 0 ? sum / count : 0;
+    }
+    return result;
+  }
+
+  /**
+   * Encode 16-bit Mono PCM WAV buffer.
+   */
+  private encodeWAV(samples: Float32Array, sampleRate: number): ArrayBuffer {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+
+    const writeString = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    };
+
+    // RIFF chunk descriptor
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+
+    // "fmt " sub-chunk
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+    view.setUint16(20, 1, true); // AudioFormat (1 for PCM)
+    view.setUint16(22, 1, true); // NumChannels (1 = mono)
+    view.setUint32(24, sampleRate, true); // SampleRate (16000)
+    view.setUint32(28, sampleRate * 2, true); // ByteRate (16000 * 1 * 2)
+    view.setUint16(32, 2, true); // BlockAlign (1 * 2)
+    view.setUint16(34, 16, true); // BitsPerSample (16 bits)
+
+    // "data" sub-chunk
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+
+    // Write PCM samples
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+
+    return buffer;
+  }
+
+  isRecording(): boolean {
+    return this.isRecordingState;
+  }
+
+  getStream(): MediaStream | null {
+    return this.stream;
+  }
+
+  destroy(): void {
+    this.isRecordingState = false;
+    this.preSpeechBuffer = [];
+    this.recordedChunks = [];
+
+    if (this.processor) {
+      this.processor.disconnect();
+      this.processor = null;
+    }
+    if (this.source) {
+      this.source.disconnect();
+      this.source = null;
+    }
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
+    }
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       try {
         this.mediaRecorder.stop();
@@ -52,111 +288,9 @@ export class AudioRecorder {
         // Ignore
       }
     }
-
-    this.audioChunks = [];
-
-    // Detect best supported mime type
-    let mimeType = '';
-    const types = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
-      'audio/ogg;codecs=opus',
-      'audio/mp4',
-      'audio/aac',
-    ];
-
-    for (const t of types) {
-      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) {
-        mimeType = t;
-        break;
-      }
-    }
-
-    const options: MediaRecorderOptions = {
-      audioBitsPerSecond: 64000,
-    };
-    if (mimeType) {
-      options.mimeType = mimeType;
-    }
-
-    this.mediaRecorder = new MediaRecorder(this.stream, options);
-
-    this.mediaRecorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) {
-        this.audioChunks.push(event.data);
-      }
-    };
-
-    // Emit data every 200ms
-    this.mediaRecorder.start(200);
-  }
-
-  /**
-   * Stop recording and return the recorded audio blob.
-   */
-  stopRecording(): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-      if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
-        // If inactive but we have chunks, resolve with what we have
-        if (this.audioChunks.length > 0) {
-          const blob = new Blob(this.audioChunks, {
-            type: this.mediaRecorder?.mimeType || 'audio/webm',
-          });
-          this.audioChunks = [];
-          resolve(blob);
-          return;
-        }
-        reject(new Error('Recorder is not active'));
-        return;
-      }
-
-      this.mediaRecorder.onstop = () => {
-        const blob = new Blob(this.audioChunks, {
-          type: this.mediaRecorder?.mimeType || 'audio/webm',
-        });
-        this.audioChunks = [];
-        resolve(blob);
-      };
-
-      // Request any buffered data before stopping
-      try {
-        if (this.mediaRecorder.state === 'recording') {
-          this.mediaRecorder.requestData();
-        }
-      } catch {
-        // Ignore
-      }
-
-      this.mediaRecorder.stop();
-    });
-  }
-
-  /**
-   * Check if currently recording.
-   */
-  isRecording(): boolean {
-    return this.mediaRecorder?.state === 'recording';
-  }
-
-  /**
-   * Get the underlying MediaStream (for VAD/visualization).
-   */
-  getStream(): MediaStream | null {
-    return this.stream;
-  }
-
-  /**
-   * Release all resources.
-   */
-  destroy(): void {
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      this.mediaRecorder.stop();
-    }
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;
     }
-    this.mediaRecorder = null;
-    this.audioChunks = [];
   }
 }
