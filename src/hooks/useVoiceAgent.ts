@@ -158,6 +158,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
+  // Persistent synchronous message history ref to prevent stale closures and memory loss
+  const messagesRef = useRef<Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>>([]);
+  const processMessageRef = useRef<(text: string, fromText?: boolean) => Promise<void>>(() => Promise.resolve());
+
   // Web Speech API accumulation
   const webSpeechFinalRef = useRef('');
   const interimSpeechRef = useRef('');
@@ -324,9 +328,11 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     setError(null);
     setLiveTranscript('');
 
-    // Append user message
+    // Append user message synchronously to messagesRef so LLM never forgets context
     const userMsg = { role: 'user' as const, content: text, timestamp: Date.now() };
-    setMessages(prev => [...prev, userMsg]);
+    const historySnapshot = [...messagesRef.current];
+    messagesRef.current.push(userMsg);
+    setMessages([...messagesRef.current]);
     optionsRef.current.onTranscript?.(text, 'user');
 
     const totalStart = Date.now();
@@ -338,18 +344,17 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       // Create empty assistant message placeholder for real-time streaming
       const assistantMsgTime = Date.now();
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant' as const, content: '', timestamp: assistantMsgTime },
-      ]);
+      const assistantPlaceholder = { role: 'assistant' as const, content: '', timestamp: assistantMsgTime };
+      messagesRef.current.push(assistantPlaceholder);
+      setMessages([...messagesRef.current]);
 
-      // --- LLM Call (streaming) ---
+      // --- LLM Call (streaming) with complete conversation history ---
       const chatResponse = await fetch('/api/voice/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          conversationHistory: messages.slice(-10).map(m => ({
+          conversationHistory: historySnapshot.slice(-14).map(m => ({
             role: m.role,
             content: m.content,
           })),
@@ -467,6 +472,11 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       if (fullResponse) {
         optionsRef.current.onTranscript?.(fullResponse, 'assistant');
+        // Synchronously save completed assistant response in messagesRef
+        const lastIdx = messagesRef.current.length - 1;
+        if (lastIdx >= 0 && messagesRef.current[lastIdx].role === 'assistant') {
+          messagesRef.current[lastIdx].content = fullResponse;
+        }
       }
 
       const totalLatency = Date.now() - totalStart;
@@ -500,7 +510,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }, 1200);
       }
     }
-  }, [messages, latency, updateState, synthesizeAndQueueChunk, transitionToListening]);
+  }, [latency, updateState, synthesizeAndQueueChunk, transitionToListening]);
+
+  // Keep processMessageRef updated to latest closure
+  processMessageRef.current = processMessage;
 
   /**
    * Start a voice call session.
@@ -508,6 +521,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
   const startCall = useCallback(async () => {
     try {
       setError(null);
+      messagesRef.current = [];
       setMessages([]);
       setIsSpeakingDetected(false);
       setLiveTranscript('');
@@ -676,7 +690,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
               recognizedText = webFinal;
               const sttLatency = Math.min(30, Date.now() - sttStart);
               setLatency(prev => ({ ...prev, sttLatency }));
-              await processMessage(recognizedText);
+              await processMessageRef.current(recognizedText);
               return;
             }
 
@@ -717,7 +731,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
             // Sanity check: must be valid speech and not just punctuation or noise
             if (recognizedText && recognizedText.trim().length > 1 && !/^[.,?!]+$/.test(recognizedText.trim())) {
-              await processMessage(recognizedText);
+              await processMessageRef.current(recognizedText);
             } else {
               // Ambient noise or silence, safely revert to listening
               if (isActiveRef.current && !isAISpeakingRef.current) {
@@ -769,8 +783,10 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
       };
       const initialGreeting = greetings[optionsRef.current.language] || greetings['en-IN'];
 
-      // Add greeting to transcript
-      setMessages([{ role: 'assistant', content: initialGreeting, timestamp: Date.now() }]);
+      // Add greeting to transcript and messagesRef
+      const greetingMsg = { role: 'assistant' as const, content: initialGreeting, timestamp: Date.now() };
+      messagesRef.current = [greetingMsg];
+      setMessages([greetingMsg]);
       optionsRef.current.onTranscript?.(initialGreeting, 'assistant');
 
       updateState('speaking');
@@ -861,7 +877,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
     }
 
     try {
-      await processMessage(text.trim(), true);
+      await processMessageRef.current(text.trim(), true);
     } finally {
       if (!wasActive) {
         const checkAndReset = () => {
@@ -875,7 +891,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         setTimeout(checkAndReset, 500);
       }
     }
-  }, [processMessage, volumeBoost]);
+  }, [volumeBoost]);
 
   /**
    * Manually finish speaking and trigger processing immediately.

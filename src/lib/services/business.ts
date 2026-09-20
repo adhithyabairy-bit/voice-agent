@@ -41,6 +41,7 @@ const FALLBACK_BUSINESS: BusinessContext = {
     { id: '4', business_id: DEFAULT_BUSINESS_ID, name: 'Teeth Whitening', description: 'Professional teeth whitening treatment', price: 3000, currency: 'INR', created_at: new Date().toISOString() },
     { id: '5', business_id: DEFAULT_BUSINESS_ID, name: 'Dental Filling', description: 'Composite dental filling', price: 800, currency: 'INR', created_at: new Date().toISOString() },
     { id: '6', business_id: DEFAULT_BUSINESS_ID, name: 'Tooth Extraction', description: 'Simple tooth extraction', price: 1500, currency: 'INR', created_at: new Date().toISOString() },
+    { id: '7', business_id: DEFAULT_BUSINESS_ID, name: 'Teeth Gap Treatment / Braces', description: 'Orthodontic braces, aligners, and dental gap closures', price: 15000, currency: 'INR', created_at: new Date().toISOString() },
   ],
   faqs: [
     { id: '1', business_id: DEFAULT_BUSINESS_ID, question: 'Do you accept insurance?', answer: 'Yes, we accept most major dental insurance plans.', created_at: new Date().toISOString() },
