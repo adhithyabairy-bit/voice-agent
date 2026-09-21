@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { User, Bot, ArrowDown } from 'lucide-react';
+import { User, Bot, ArrowDown, Zap } from 'lucide-react';
 
 interface TranscriptMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  /** Optional TTS latency in ms to display on AI bubbles */
+  latencyMs?: number;
 }
 
 interface TranscriptProps {
@@ -73,57 +75,84 @@ export function Transcript({ messages, isProcessing }: TranscriptProps) {
             <div
               className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
                 msg.role === 'user'
-                  ? 'bg-blue-500/10 text-blue-600'
-                  : 'bg-violet-500/10 text-violet-600'
+                  ? 'text-white'
+                  : 'text-white'
               }`}
+              style={{
+                background: msg.role === 'user'
+                  ? 'var(--gradient-primary)'
+                  : 'var(--gradient-accent)',
+              }}
             >
               {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
             </div>
 
             {/* Message bubble */}
-            <div
-              className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                msg.role === 'user'
-                  ? 'bg-[var(--primary)] text-white rounded-br-md'
-                  : 'bg-[var(--muted)] text-[var(--foreground)] rounded-bl-md border border-[var(--border)]'
-              }`}
-            >
-              <p className="m-0 whitespace-pre-wrap">{msg.content || '...'}</p>
-              <p
-                className={`text-[10px] mt-1 ${
-                  msg.role === 'user' ? 'text-white/70' : 'text-[var(--muted-foreground)]'
-                }`}
+            {msg.role === 'user' ? (
+              <div
+                className="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-br-md text-sm leading-relaxed shadow-sm text-white"
+                style={{ background: 'var(--gradient-primary)' }}
               >
-                {msg.role === 'user' ? 'You' : 'AI'} ·{' '}
-                {new Date(msg.timestamp).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })}
-              </p>
-            </div>
+                <p className="m-0 whitespace-pre-wrap">{msg.content || '...'}</p>
+                <p className="text-[10px] mt-1 text-white/70">
+                  You ·{' '}
+                  {new Date(msg.timestamp).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })}
+                </p>
+              </div>
+            ) : (
+              // AI bubble — glassmorphism with orange tint
+              <div className="glass-bubble-ai max-w-[80%] px-4 py-2.5 text-sm leading-relaxed shadow-sm">
+                <p className="m-0 whitespace-pre-wrap text-[var(--foreground)]">{msg.content || '...'}</p>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <p className="text-[10px] text-[var(--muted-foreground)]">
+                    AI ·{' '}
+                    {new Date(msg.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                    })}
+                  </p>
+                  {msg.latencyMs && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                      style={{ background: 'rgba(255,90,31,0.12)', color: 'var(--primary)' }}
+                    >
+                      <Zap size={8} />
+                      {msg.latencyMs}ms
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ))}
 
         {/* Typing / Generating indicator */}
         {isProcessing && (
           <div className="flex gap-3 animate-fade-in">
-            <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-violet-500/10 text-violet-600">
+            <div
+              className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white"
+              style={{ background: 'var(--gradient-accent)' }}
+            >
               <Bot size={14} />
             </div>
-            <div className="px-4 py-3 rounded-2xl rounded-bl-md bg-[var(--muted)] border border-[var(--border)]">
+            <div className="glass-bubble-ai px-4 py-3">
               <div className="flex items-center gap-1.5">
                 <div
-                  className="w-2 h-2 rounded-full bg-[var(--primary)] animate-bounce"
-                  style={{ animationDelay: '0ms' }}
+                  className="w-2 h-2 rounded-full animate-bounce"
+                  style={{ background: 'var(--primary)', animationDelay: '0ms' }}
                 />
                 <div
-                  className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce"
-                  style={{ animationDelay: '150ms' }}
+                  className="w-2 h-2 rounded-full animate-bounce"
+                  style={{ background: 'var(--accent)', animationDelay: '150ms' }}
                 />
                 <div
-                  className="w-2 h-2 rounded-full bg-violet-400 animate-bounce"
-                  style={{ animationDelay: '300ms' }}
+                  className="w-2 h-2 rounded-full animate-bounce"
+                  style={{ background: 'var(--primary)', animationDelay: '300ms' }}
                 />
                 <span className="text-[11px] text-[var(--muted-foreground)] ml-1">Thinking...</span>
               </div>
@@ -142,7 +171,8 @@ export function Transcript({ messages, isProcessing }: TranscriptProps) {
             setIsAtBottom(true);
             scrollToBottom('smooth');
           }}
-          className="absolute bottom-3 right-4 flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-full shadow-md hover:bg-[var(--muted)] transition-all animate-fade-in"
+          className="absolute bottom-3 right-4 flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white border border-[rgba(255,90,31,0.3)] rounded-full shadow-md transition-all animate-fade-in hover:opacity-90"
+          style={{ background: 'var(--gradient-primary)' }}
           aria-label="Scroll to newest messages"
         >
           <ArrowDown size={12} />

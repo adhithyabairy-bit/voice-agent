@@ -114,7 +114,7 @@ export default function AgentPage() {
               </Link>
               <Link
                 href="/onboarding"
-                className="text-emerald-500 hover:underline flex items-center gap-1 font-medium"
+                className="text-[var(--accent)] hover:underline flex items-center gap-1 font-medium"
               >
                 <Sparkles size={12} /> New Business
               </Link>
@@ -161,9 +161,10 @@ export default function AgentPage() {
                   disabled={isCallActive}
                   className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
                     personality === p
-                      ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                      ? 'text-white border-transparent'
                       : 'bg-[var(--card)] text-[var(--foreground)] border-[var(--border)] hover:border-[var(--primary)]'
                   } disabled:opacity-50`}
+                  style={personality === p ? { background: 'var(--gradient-primary)' } : undefined}
                   id={`personality-${p}`}
                 >
                   {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -272,7 +273,8 @@ export default function AgentPage() {
             {isCallActive && (
               <div className="flex flex-col items-center gap-2 animate-fade-in max-w-lg text-center">
                 {voiceAgent.callState === 'speaking' ? (
-                  <div className="text-xs px-4 py-2 rounded-full font-medium bg-purple-50 text-purple-800 border border-purple-300 shadow-sm animate-pulse">
+                  <div className="text-xs px-4 py-2 rounded-full font-medium border shadow-sm animate-pulse"
+                    style={{ background: 'rgba(255,90,31,0.08)', color: 'var(--primary)', borderColor: 'rgba(255,90,31,0.3)' }}>
                     🔊 AI Speaking... (speak anytime to interrupt)
                   </div>
                 ) : voiceAgent.callState === 'processing' ? (
@@ -351,7 +353,7 @@ export default function AgentPage() {
                   onClick={handleSendText}
                   disabled={!textInput.trim()}
                   className="px-4 py-2.5 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-40"
-                  style={{ background: 'var(--gradient-primary)' }}
+                  style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-glow)' }}
                   aria-label="Send message"
                   id="send-button"
                 >

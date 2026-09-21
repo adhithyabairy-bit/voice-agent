@@ -10,10 +10,13 @@ import {
   ArrowRight,
   Phone,
   Sparkles,
+  Zap,
 } from 'lucide-react';
+import { WaveformOrb } from '@/components/voice/waveform-orb';
 
 // ============================================================
 // Landing Page — Hero + Demo Conversation + Features
+// Sunset Orange Theme
 // ============================================================
 
 export default function LandingPage() {
@@ -36,7 +39,7 @@ export default function LandingPage() {
           <div className="flex items-center gap-3">
             <Link
               href="/onboarding"
-              className="text-sm font-semibold text-emerald-400 hover:text-emerald-300 transition-colors hidden sm:flex items-center gap-1 no-underline"
+              className="text-sm font-semibold text-[var(--accent)] hover:opacity-80 transition-opacity hidden sm:flex items-center gap-1 no-underline"
             >
               <Sparkles size={14} /> Create Business Agent
             </Link>
@@ -49,7 +52,7 @@ export default function LandingPage() {
             <Link
               href="/agent"
               className="flex items-center gap-2 px-5 py-2.5 rounded-full text-white text-sm font-medium transition-all hover:opacity-90 hover:scale-105 active:scale-95 no-underline"
-              style={{ background: 'var(--gradient-primary)' }}
+              style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-glow)' }}
               id="cta-try-agent"
             >
               <Phone size={14} />
@@ -61,11 +64,18 @@ export default function LandingPage() {
 
       {/* Hero Section */}
       <section className="relative flex-1 flex flex-col items-center justify-center px-6 pt-20 pb-16 overflow-hidden">
-        {/* Background gradient */}
+        {/* Background radial gradient — warm ember */}
         <div
-          className="absolute inset-0 -z-10 opacity-5"
+          className="absolute inset-0 -z-10"
           style={{
-            background: 'radial-gradient(ellipse 80% 60% at 50% -20%, rgba(99, 102, 241, 0.4), transparent)',
+            background: 'radial-gradient(ellipse 80% 60% at 50% -20%, rgba(255, 90, 31, 0.12), transparent)',
+          }}
+        />
+        {/* Subtle secondary bloom */}
+        <div
+          className="absolute inset-0 -z-10 opacity-40"
+          style={{
+            background: 'radial-gradient(ellipse 50% 40% at 80% 80%, rgba(255, 176, 32, 0.07), transparent)',
           }}
         />
 
@@ -76,6 +86,11 @@ export default function LandingPage() {
             Autonomous Multilingual AI Voice Receptionist for Any Business
           </div>
 
+          {/* Waveform Orb — live voice visualizer */}
+          <div className="flex justify-center py-2">
+            <WaveformOrb size={80} active={true} />
+          </div>
+
           {/* Headline */}
           <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1]">
             Custom AI Voice Agents for{' '}
@@ -83,7 +98,7 @@ export default function LandingPage() {
               className="bg-clip-text text-transparent animate-gradient"
               style={{ backgroundImage: 'var(--gradient-hero)' }}
             >
-              Clinics, Salons, Dining & More
+              Clinics, Salons, Dining &amp; More
             </span>
           </h1>
 
@@ -96,7 +111,11 @@ export default function LandingPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
             <Link
               href="/onboarding"
-              className="flex items-center gap-2 px-8 py-3.5 rounded-full text-slate-950 font-bold text-base transition-all hover:scale-105 active:scale-95 shadow-lg no-underline bg-gradient-to-r from-emerald-400 to-teal-400"
+              className="flex items-center gap-2 px-8 py-3.5 rounded-full text-white font-bold text-base transition-all hover:scale-105 active:scale-95 no-underline"
+              style={{
+                background: 'var(--gradient-primary)',
+                boxShadow: 'var(--shadow-glow)',
+              }}
               id="hero-cta-onboarding"
             >
               <Sparkles size={18} />
@@ -104,8 +123,8 @@ export default function LandingPage() {
             </Link>
             <Link
               href="/agent"
-              className="flex items-center gap-2 px-8 py-3.5 rounded-full text-white text-base font-medium transition-all hover:opacity-90 hover:scale-105 active:scale-95 shadow-lg no-underline"
-              style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-glow)' }}
+              className="flex items-center gap-2 px-8 py-3.5 rounded-full text-white text-base font-medium transition-all hover:opacity-90 hover:scale-105 active:scale-95 shadow-lg no-underline border border-white/20"
+              style={{ background: 'rgba(255,90,31,0.15)', backdropFilter: 'blur(8px)' }}
               id="hero-cta-primary"
             >
               <Phone size={18} />
@@ -127,7 +146,7 @@ export default function LandingPage() {
           <div className="glass-card p-8 space-y-6 animate-slide-up">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white" style={{ background: 'var(--gradient-accent)' }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white" style={{ background: 'var(--gradient-primary)' }}>
                   <Mic size={18} />
                 </div>
                 <div>
@@ -140,31 +159,46 @@ export default function LandingPage() {
 
             {/* Conversation messages */}
             <div className="space-y-4">
-              <div className="flex gap-3">
-                <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-medium flex-shrink-0">C</div>
-                <div className="bg-blue-500 text-white px-4 py-2.5 rounded-2xl rounded-bl-md text-sm max-w-[80%]">
-                  <p className="m-0">మీ క్లినిక్ రేపు ఎన్ని గంటలకు ఓపెన్ అవుతుంది?</p>
+              {/* Customer message */}
+              <div className="flex gap-3 flex-row-reverse">
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0 text-white"
+                  style={{ background: 'var(--gradient-primary)' }}>C</div>
+                <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm max-w-[80%] text-white"
+                  style={{ background: 'var(--gradient-primary)' }}>
+                  <p className="m-0">మీ clinic రేపు ఎన్ని గంటలకు open అవుతుంది?</p>
                   <p className="text-[10px] text-white/60 mt-1">Customer · Telugu</p>
                 </div>
               </div>
 
+              {/* AI response with glassmorphism + latency badge */}
               <div className="flex gap-3">
-                <div className="w-7 h-7 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center text-xs font-medium flex-shrink-0">AI</div>
-                <div className="bg-[var(--muted)] px-4 py-2.5 rounded-2xl rounded-bl-md text-sm max-w-[80%]">
-                  <p className="m-0">మా క్లినిక్ రేపు ఉదయం 9 గంటలకు ఓపెన్ అవుతుంది, రాత్రి 8 గంటల వరకు ఉంటుంది.</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)] mt-1">AI · Telugu · 340ms</p>
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0 text-white"
+                  style={{ background: 'var(--gradient-accent)' }}>AI</div>
+                <div className="glass-bubble-ai px-4 py-2.5 text-sm max-w-[80%]">
+                  <p className="m-0 text-[var(--foreground)]">మా clinic రేపు morning 9:00 AM కి open అవుతుంది అండి. మీకు slot book చేయమంటారా?</p>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <p className="text-[10px] text-[var(--muted-foreground)]">AI · Telugu</p>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background: 'rgba(255,90,31,0.12)', color: 'var(--primary)' }}>
+                      <Zap size={9} />340ms
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
 
+            {/* Live waveform indicator */}
             <div className="flex items-center justify-center gap-1 pt-2">
-              {[1, 2, 3, 4, 5].map((i) => (
+              {[1, 2, 3, 4, 5, 6, 7].map((i) => (
                 <div
                   key={i}
-                  className="w-1 rounded-full bg-[var(--accent)]"
+                  className="waveform-bar rounded-full"
                   style={{
-                    height: `${8 + Math.random() * 16}px`,
-                    opacity: 0.5 + Math.random() * 0.5,
+                    width: '4px',
+                    height: `${8 + (i % 3) * 10}px`,
+                    background: 'var(--gradient-primary)',
+                    opacity: 0.6,
+                    animationDelay: `${i * 0.08}s`,
                   }}
                 />
               ))}
@@ -188,7 +222,7 @@ export default function LandingPage() {
               {
                 icon: Globe,
                 title: 'Indian Languages',
-                description: 'Telugu, Hindi, English — with natural code-mixing support. More languages coming soon.',
+                description: 'Telugu, Hindi, English — with natural Tenglish code-mixing support. More languages coming soon.',
               },
               {
                 icon: Clock,
@@ -218,9 +252,10 @@ export default function LandingPage() {
             ].map((feature, i) => (
               <div
                 key={i}
-                className="glass-card p-6 space-y-3 transition-all hover:shadow-lg hover:-translate-y-1"
+                className="glass-card p-6 space-y-3 transition-all hover:shadow-lg hover:-translate-y-1 group"
               >
-                <div className="w-10 h-10 rounded-xl bg-[var(--muted)] flex items-center justify-center text-[var(--accent)]">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center transition-all group-hover:scale-110"
+                  style={{ background: 'rgba(255,90,31,0.10)', color: 'var(--primary)' }}>
                   <feature.icon size={20} />
                 </div>
                 <h3 className="font-semibold text-base">{feature.title}</h3>
@@ -237,7 +272,7 @@ export default function LandingPage() {
       <section className="py-20 px-6">
         <div
           className="max-w-4xl mx-auto rounded-3xl p-12 text-center text-white space-y-6"
-          style={{ background: 'var(--gradient-hero)' }}
+          style={{ background: 'var(--gradient-hero)', boxShadow: 'var(--shadow-orange)' }}
         >
           <h2 className="text-3xl md:text-4xl font-bold">Ready to automate your calls?</h2>
           <p className="text-white/80 max-w-lg mx-auto">
@@ -250,6 +285,7 @@ export default function LandingPage() {
           >
             <Phone size={18} />
             Try AI Agent Now
+            <ArrowRight size={16} />
           </Link>
         </div>
       </section>

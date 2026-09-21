@@ -85,8 +85,8 @@ export function CallButton({ state, onStart, onEnd, volume = 0, disabled }: Call
               className="absolute inset-0 rounded-full animate-pulse-ring"
               style={{
                 background: state === 'listening' ? 'rgba(37, 99, 235, 0.15)' :
-                  state === 'speaking' ? 'rgba(139, 92, 246, 0.15)' :
-                  'rgba(245, 158, 11, 0.15)',
+                  state === 'speaking' ? 'rgba(255, 90, 31, 0.18)' :
+                  'rgba(255, 176, 32, 0.18)',
                 transform: `scale(${1 + volume * 0.3})`,
               }}
             />
@@ -94,8 +94,8 @@ export function CallButton({ state, onStart, onEnd, volume = 0, disabled }: Call
               className="absolute inset-[-12px] rounded-full animate-pulse-ring"
               style={{
                 background: state === 'listening' ? 'rgba(37, 99, 235, 0.08)' :
-                  state === 'speaking' ? 'rgba(139, 92, 246, 0.08)' :
-                  'rgba(245, 158, 11, 0.08)',
+                  state === 'speaking' ? 'rgba(255, 90, 31, 0.08)' :
+                  'rgba(255, 176, 32, 0.08)',
                 animationDelay: '0.5s',
               }}
             />
@@ -132,7 +132,7 @@ export function CallButton({ state, onStart, onEnd, volume = 0, disabled }: Call
         <button
           onClick={onEnd}
           className="flex items-center gap-2 px-6 py-2.5 rounded-full text-white text-sm font-medium transition-all hover:opacity-90 hover:scale-105 active:scale-95"
-          style={{ background: 'var(--gradient-end)' }}
+          style={{ background: 'var(--gradient-end)', boxShadow: '0 4px 16px rgba(239,68,68,0.35)' }}
           aria-label="End call"
           id="end-call-button"
         >

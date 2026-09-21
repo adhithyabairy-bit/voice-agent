@@ -21,26 +21,27 @@
   --muted-foreground: #737373;
   --border: #e5e5e5;
   --input: #e5e5e5;
-  --primary: #2563eb;
+  --primary: #FF5A1F;
+  --primary-hover: #E0480F;
   --primary-foreground: #ffffff;
-  --accent: #6366f1;
+  --accent: #FFB020;
   --accent-foreground: #ffffff;
   --success: #10b981;
   --warning: #f59e0b;
   --destructive: #ef4444;
-  --ring: #2563eb;
+  --ring: #FF5A1F;
 
   /* Voice-specific colors */
   --listening: #3b82f6;
-  --speaking: #8b5cf6;
-  --processing: #f59e0b;
+  --speaking: #FF5A1F;
+  --processing: #FFB020;
   --call-active: #10b981;
   --call-end: #ef4444;
 
   /* Gradients */
-  --gradient-primary: linear-gradient(135deg, #2563eb 0%, #6366f1 100%);
-  --gradient-accent: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
-  --gradient-hero: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #6366f1 100%);
+  --gradient-primary: linear-gradient(135deg, #FF5A1F 0%, #FFB020 100%);
+  --gradient-accent: linear-gradient(135deg, #FFB020 0%, #FF5A1F 100%);
+  --gradient-hero: linear-gradient(135deg, #FF5A1F 0%, #FFB020 100%);
   --gradient-call: linear-gradient(135deg, #10b981 0%, #059669 100%);
   --gradient-end: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
 
@@ -49,23 +50,25 @@
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
-  --shadow-glow: 0 0 30px rgba(37, 99, 235, 0.15);
+  --shadow-glow: 0 4px 20px rgba(255, 90, 31, 0.3);
   --shadow-call: 0 0 40px rgba(16, 185, 129, 0.3);
+  --shadow-orange: 0 4px 24px rgba(255, 90, 31, 0.35);
 }
 
 /* Dark mode overrides */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #09090b;
+    --background: #0F0E13;
     --foreground: #fafafa;
-    --card: #18181b;
+    --card: #1a1520;
     --card-foreground: #fafafa;
-    --muted: #27272a;
+    --muted: #251f2d;
     --muted-foreground: #a1a1aa;
-    --border: #27272a;
-    --input: #27272a;
-    --shadow-glow: 0 0 30px rgba(99, 102, 241, 0.2);
+    --border: rgba(255, 90, 31, 0.15);
+    --input: #251f2d;
+    --shadow-glow: 0 4px 20px rgba(255, 90, 31, 0.25);
     --shadow-call: 0 0 40px rgba(16, 185, 129, 0.4);
+    --shadow-orange: 0 4px 24px rgba(255, 90, 31, 0.45);
   }
 }
 
@@ -170,6 +173,40 @@ body {
   }
 }
 
+/* Orb / waveform hero pulse */
+@keyframes orb-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+@keyframes orb-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+@keyframes orb-bar {
+  0%, 100% {
+    transform: scaleY(0.4);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
 .animate-pulse-ring {
   animation: pulse-ring 1.5s ease-out infinite;
 }
@@ -199,6 +236,14 @@ body {
   animation: gradient-shift 4s ease infinite;
 }
 
+.animate-orb-pulse {
+  animation: orb-pulse 2.5s ease-in-out infinite;
+}
+
+.animate-orb-ring {
+  animation: orb-ring 2s ease-out infinite;
+}
+
 /* Waveform bars */
 .waveform-bar {
   animation: waveform 0.6s ease-in-out infinite;
@@ -208,6 +253,19 @@ body {
 .waveform-bar:nth-child(3) { animation-delay: 0.2s; }
 .waveform-bar:nth-child(4) { animation-delay: 0.3s; }
 .waveform-bar:nth-child(5) { animation-delay: 0.4s; }
+
+/* Orb waveform bars */
+.orb-bar {
+  animation: orb-bar 0.7s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+.orb-bar:nth-child(1) { animation-delay: 0.00s; }
+.orb-bar:nth-child(2) { animation-delay: 0.10s; }
+.orb-bar:nth-child(3) { animation-delay: 0.20s; }
+.orb-bar:nth-child(4) { animation-delay: 0.30s; }
+.orb-bar:nth-child(5) { animation-delay: 0.20s; }
+.orb-bar:nth-child(6) { animation-delay: 0.10s; }
+.orb-bar:nth-child(7) { animation-delay: 0.00s; }
 
 /* ============================================================
    Call Button States
@@ -241,18 +299,18 @@ body {
 }
 
 .call-button--listening {
-  background: var(--gradient-primary);
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
   box-shadow: 0 0 40px rgba(37, 99, 235, 0.4);
 }
 
 .call-button--processing {
-  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-  box-shadow: 0 0 40px rgba(245, 158, 11, 0.3);
+  background: linear-gradient(135deg, #FFB020 0%, #FF5A1F 100%);
+  box-shadow: 0 0 40px rgba(255, 176, 32, 0.4);
 }
 
 .call-button--speaking {
-  background: var(--gradient-accent);
-  box-shadow: 0 0 40px rgba(139, 92, 246, 0.4);
+  background: var(--gradient-primary);
+  box-shadow: var(--shadow-orange);
 }
 
 .call-button--ended,
@@ -275,7 +333,7 @@ body {
    ============================================================ */
 
 .glass-card {
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -284,7 +342,23 @@ body {
 
 @media (prefers-color-scheme: dark) {
   .glass-card {
-    background: rgba(24, 24, 27, 0.8);
+    background: rgba(26, 21, 32, 0.85);
+    border: 1px solid rgba(255, 90, 31, 0.15);
+  }
+}
+
+/* Orange-tinted glass for AI response bubbles */
+.glass-bubble-ai {
+  background: rgba(255, 90, 31, 0.06);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 90, 31, 0.2);
+  border-radius: 16px 16px 16px 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .glass-bubble-ai {
+    background: rgba(255, 90, 31, 0.08);
+    border: 1px solid rgba(255, 90, 31, 0.25);
   }
 }
 
@@ -311,12 +385,12 @@ body {
 }
 
 .sidebar-item--active {
-  background: var(--primary);
+  background: var(--gradient-primary);
   color: white;
 }
 
 .sidebar-item--active:hover {
-  background: var(--primary);
+  background: var(--gradient-primary);
   color: white;
   opacity: 0.9;
 }

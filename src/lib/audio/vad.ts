@@ -36,7 +36,7 @@ export class VoiceActivityDetector {
   constructor(options?: VADOptions) {
     this.options = {
       threshold: options?.threshold ?? 0.007,
-      hangoverTime: options?.hangoverTime ?? 650,
+      hangoverTime: options?.hangoverTime ?? 310,
       minSpeechDuration: options?.minSpeechDuration ?? 120,
       onSpeechStart: options?.onSpeechStart ?? (() => {}),
       onSpeechEnd: options?.onSpeechEnd ?? (() => {}),

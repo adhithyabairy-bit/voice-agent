@@ -45,7 +45,7 @@ export async function* streamChatResponse(
     messages,
     stream: true,
     temperature: options?.temperature ?? 0.7,
-    max_tokens: options?.maxTokens ?? 300,
+    max_tokens: options?.maxTokens ?? 150,
   });
 
   for await (const chunk of stream) {
@@ -74,7 +74,7 @@ export async function getChatResponse(
     model: options?.model || 'qwen/qwen3.8-27b',
     messages,
     temperature: options?.temperature ?? 0.7,
-    max_tokens: options?.maxTokens ?? 300,
+    max_tokens: options?.maxTokens ?? 150,
   });
 
   return response.choices[0]?.message?.content || '';
