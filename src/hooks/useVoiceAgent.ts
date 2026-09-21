@@ -273,7 +273,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           text: textChunk,
           language: optionsRef.current.language,
           voice: optionsRef.current.voice,
-          pace: 1.38,
+          pace: 1.25,
         }),
         signal: abortControllerRef.current?.signal,
       });
