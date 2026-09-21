@@ -81,6 +81,10 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   return Array.from(vector);
 }
 
+// In-memory cache for semantic knowledge retrieval (5 min TTL)
+const knowledgeCache = new Map<string, { chunks: string[]; timestamp: number }>();
+const KNOWLEDGE_CACHE_TTL = 5 * 60 * 1000;
+
 /**
  * Retrieve the most relevant business knowledge chunks for a caller's query.
  * Strictly scoped to the specified businessId.
@@ -92,6 +96,12 @@ export async function retrieveBusinessKnowledge(
 ): Promise<string[]> {
   if (!businessId || !query || !query.trim() || !isSupabaseConfigured()) {
     return [];
+  }
+
+  const cacheKey = `${businessId}:${query.toLowerCase().trim()}`;
+  const cached = knowledgeCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < KNOWLEDGE_CACHE_TTL) {
+    return cached.chunks;
   }
 
   try {
@@ -109,7 +119,9 @@ export async function retrieveBusinessKnowledge(
     );
 
     if (!rpcError && vectorResults && vectorResults.length > 0) {
-      return (vectorResults as Array<{ content: string }>).map((r) => r.content);
+      const chunks = (vectorResults as Array<{ content: string }>).map((r) => r.content);
+      knowledgeCache.set(cacheKey, { chunks, timestamp: Date.now() });
+      return chunks;
     }
 
     // 2. Keyword fallback with strict business_id filter
@@ -129,13 +141,17 @@ export async function retrieveBusinessKnowledge(
         .limit(topK);
 
       if (keywordResults && keywordResults.length > 0) {
-        return keywordResults.map((r) => r.content);
+        const chunks = keywordResults.map((r) => r.content);
+        knowledgeCache.set(cacheKey, { chunks, timestamp: Date.now() });
+        return chunks;
       }
     }
 
+    knowledgeCache.set(cacheKey, { chunks: [], timestamp: Date.now() });
     return [];
   } catch (err) {
     console.warn('Knowledge retrieval warning:', err);
     return [];
   }
 }
+

@@ -10,11 +10,12 @@ import { getBusinessInfo } from '@/lib/services/business';
 import { retrieveBusinessKnowledge } from '@/lib/ai/knowledge';
 import { buildSystemPrompt } from '@/lib/ai/prompts';
 import { getAuthSession } from '@/lib/auth/session';
-import type { LanguageCode, AgentPersonality } from '@/types';
+import type { LanguageCode, AgentPersonality, BusinessContext } from '@/types';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
+  const requestStartTime = Date.now();
   try {
     const body = await request.json();
     const {
@@ -23,12 +24,14 @@ export async function POST(request: Request) {
       language = 'te-IN',
       personality = 'friendly',
       businessId,
+      businessContext: clientBusinessContext,
     } = body as {
       message: string;
       conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
       language: LanguageCode;
       personality: AgentPersonality;
       businessId?: string;
+      businessContext?: BusinessContext;
     };
 
     if (!message) {
@@ -48,22 +51,44 @@ export async function POST(request: Request) {
       });
     }
 
-    // Resolve business context
-    let resolvedBusinessId = businessId;
-    if (!resolvedBusinessId) {
-      const session = await getAuthSession(request);
-      resolvedBusinessId = session?.business?.id;
-    }
+    // Resolve business context — Fast path: use client-supplied context if available (0ms DB delay)
+    let businessContext: BusinessContext;
 
-    const businessContext = await getBusinessInfo(resolvedBusinessId);
-
-    // Retrieve semantic RAG knowledge chunks for this specific business
-    if (businessContext.business?.id) {
+    if (clientBusinessContext?.business?.id) {
+      businessContext = { ...clientBusinessContext };
+      // Retrieve semantic RAG knowledge chunks with strict 120ms race timeout
       try {
-        const chunks = await retrieveBusinessKnowledge(businessContext.business.id, message, 3);
-        businessContext.knowledgeChunks = chunks;
+        const ragPromise = retrieveBusinessKnowledge(businessContext.business.id, message, 2);
+        const timeoutPromise = new Promise<string[]>((res) => setTimeout(() => res([]), 120));
+        const chunks = await Promise.race([ragPromise, timeoutPromise]);
+        if (chunks && chunks.length > 0) {
+          businessContext.knowledgeChunks = chunks;
+        }
       } catch (ragErr) {
         console.warn('RAG knowledge retrieval non-blocking error:', ragErr);
+      }
+    } else {
+      // Fallback path: parallel fetch business info & RAG if businessId known
+      let resolvedBusinessId = businessId;
+      if (!resolvedBusinessId) {
+        const session = await getAuthSession(request);
+        resolvedBusinessId = session?.business?.id;
+      }
+
+      if (resolvedBusinessId) {
+        const [bContext, chunks] = await Promise.all([
+          getBusinessInfo(resolvedBusinessId),
+          Promise.race([
+            retrieveBusinessKnowledge(resolvedBusinessId, message, 2),
+            new Promise<string[]>((res) => setTimeout(() => res([]), 140))
+          ]).catch(() => [] as string[]),
+        ]);
+        businessContext = bContext;
+        if (chunks && chunks.length > 0) {
+          businessContext.knowledgeChunks = chunks;
+        }
+      } else {
+        businessContext = await getBusinessInfo(resolvedBusinessId);
       }
     }
 
@@ -79,7 +104,6 @@ export async function POST(request: Request) {
     ];
 
     // Stream the response
-    const startTime = Date.now();
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({
@@ -90,9 +114,9 @@ export async function POST(request: Request) {
             temperature: 0.6,
             maxTokens: 80,
           })) {
-            // Send timing info with first chunk
+            // Send timing info with first chunk (measured from true request start)
             if (firstChunk) {
-              const firstTokenLatency = Date.now() - startTime;
+              const firstTokenLatency = Date.now() - requestStartTime;
               controller.enqueue(
                 encoder.encode(
                   JSON.stringify({ type: 'latency', firstTokenLatency }) + '\n'
@@ -110,7 +134,7 @@ export async function POST(request: Request) {
 
           controller.enqueue(
             encoder.encode(
-              JSON.stringify({ type: 'done', totalLatency: Date.now() - startTime }) + '\n'
+              JSON.stringify({ type: 'done', totalLatency: Date.now() - requestStartTime }) + '\n'
             )
           );
           controller.close();

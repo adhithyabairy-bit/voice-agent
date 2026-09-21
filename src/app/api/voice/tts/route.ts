@@ -4,7 +4,7 @@
 // Keeps SARVAM_API_KEY server-side.
 // ============================================================
 
-import { synthesizeSpeechStream, synthesizeSpeech } from '@/lib/ai/sarvam-tts';
+import { synthesizeSpeechStream, synthesizeSpeech, getCachedTTSAudio } from '@/lib/ai/sarvam-tts';
 import { isSarvamConfigured } from '@/lib/ai/sarvam-stt';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,38 @@ export async function POST(request: Request) {
       });
     }
 
-    // Ultra-low latency streaming TTS from Sarvam (TTFB ~400ms)
+    // 0ms instant cached response for frequent conversational phrases
+    const cachedAudio = getCachedTTSAudio(text, language, { speaker: voice, pace });
+    if (cachedAudio) {
+      return new Response(cachedAudio, {
+        headers: {
+          'Content-Type': 'audio/wav',
+          'X-TTS-Cached': 'true',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    }
+
+    // For short chunks (<= 6 words, e.g. openers), REST synthesis with caching is fastest
+    const wordCount = text.trim().split(/\s+/).length;
+    if (wordCount <= 6) {
+      const startTime = Date.now();
+      const audioData = await synthesizeSpeech(text, language, {
+        speaker: voice,
+        pace,
+        temperature,
+      });
+      const latency = Date.now() - startTime;
+      return new Response(audioData, {
+        headers: {
+          'Content-Type': 'audio/wav',
+          'X-TTS-Latency': String(latency),
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+
+    // Ultra-low latency streaming TTS from Sarvam for longer sentences
     try {
       const stream = await synthesizeSpeechStream(text, language, {
         speaker: voice,

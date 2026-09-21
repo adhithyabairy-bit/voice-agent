@@ -16,6 +16,19 @@ export interface TTSOptions {
   speech_sample_rate?: number;
 }
 
+// In-memory audio buffer cache for instant 0ms responses on common phrases
+export const ttsAudioCache = new Map<string, ArrayBuffer>();
+
+export function getCachedTTSAudio(
+  text: string,
+  languageCode: string,
+  options?: TTSOptions
+): ArrayBuffer | null {
+  const cacheKey = `${languageCode}:${options?.speaker || 'aditya'}:${options?.pace || 1.45}:${text.trim()}`;
+  const cached = ttsAudioCache.get(cacheKey);
+  return cached ? cached.slice(0) : null;
+}
+
 /**
  * Synthesize speech from text using Sarvam TTS (REST, base64 response).
  *
@@ -32,6 +45,12 @@ export async function synthesizeSpeech(
   const apiKey = process.env.SARVAM_API_KEY;
   if (!apiKey) {
     throw new Error('SARVAM_API_KEY is not configured');
+  }
+
+  const cacheKey = `${languageCode}:${options?.speaker || 'aditya'}:${options?.pace || 1.45}:${text.trim()}`;
+  const cached = ttsAudioCache.get(cacheKey);
+  if (cached) {
+    return cached.slice(0);
   }
 
   // Truncate text to stay within API limits
@@ -61,15 +80,16 @@ export async function synthesizeSpeech(
 
   const result = await response.json();
 
-  // Sarvam returns base64-encoded audio; decode it
+  // Sarvam returns base64-encoded audio; decode it natively
   if (result.audios && result.audios.length > 0) {
     const base64Audio = result.audios[0];
-    const binaryString = atob(base64Audio);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
+    const nodeBuf = Buffer.from(base64Audio, 'base64');
+    const arrayBuffer = nodeBuf.buffer.slice(
+      nodeBuf.byteOffset,
+      nodeBuf.byteOffset + nodeBuf.byteLength
+    );
+    ttsAudioCache.set(cacheKey, arrayBuffer);
+    return arrayBuffer.slice(0);
   }
 
   throw new Error('No audio data in Sarvam TTS response');

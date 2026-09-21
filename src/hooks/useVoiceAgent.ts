@@ -17,7 +17,7 @@ import { AudioRecorder } from '@/lib/audio/recorder';
 import { AudioPlayer } from '@/lib/audio/player';
 import { VoiceActivityDetector } from '@/lib/audio/vad';
 import { authFetch } from '@/lib/api/auth-fetch';
-import type { CallState, LanguageCode, LatencyMetrics } from '@/types';
+import type { CallState, LanguageCode, LatencyMetrics, BusinessContext } from '@/types';
 
 interface VoiceAgentOptions {
   language: LanguageCode;
@@ -26,6 +26,7 @@ interface VoiceAgentOptions {
   businessId?: string;
   businessName?: string;
   greeting?: string;
+  businessContext?: BusinessContext;
   onTranscript?: (text: string, role: 'user' | 'assistant') => void;
   onStateChange?: (state: CallState) => void;
   onError?: (error: string) => void;
@@ -70,11 +71,11 @@ interface BrowserSpeechRecognition {
  * Split streamed LLM buffer into speech-ready chunks for real-time TTS.
  *
  * Strategy (fastest possible first-audio latency):
- * 1. Full sentence boundary → always dispatch immediately
- * 2. Comma/clause boundary → dispatch if chunk has 2+ words (catches "అలాగే అండి,")
- * 3. Early speculative dispatch → after just 5 words with no punctuation, fire the
- *    first 4 words immediately so TTS audio starts while LLM finishes the sentence
- * 4. Hard fallback → 8+ word buffer, split at 5
+ * 1. Full sentence boundary → always dispatch immediately (. ? ! । \n)
+ * 2. Comma/clause boundary → dispatch immediately if chunk has 2+ words (catches "అలాగే అండి," / "సరే అండి,")
+ * 3. Early speculative dispatch → after 4 words without punctuation, dispatch first 3 words immediately
+ *    so TTS starts playing while the LLM continues generating the rest of the sentence
+ * 4. Hard fallback → 6+ word buffer, split at 3
  */
 function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: string } {
   const chunks: string[] = [];
@@ -93,14 +94,13 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
     const words = remaining.trim().split(/\s+/);
 
     // 2. Clause boundary (, ; : —) — fire as soon as 2+ words before the comma
-    //    This catches openers like "అలాగే అండి," or "సరే అండి," immediately
+    //    Catches openers like "అలాగే అండి," or "సరే అండి," with ZERO extra delay
     if (words.length >= 2) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:—\u2013\u2014]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
         const clauseWords = chunk.split(/\s+/);
-        // Only dispatch if there's more text after the comma (not trailing comma at end)
-        if (clauseWords.length >= 2 && clauseMatch[3].trim().length > 0) {
+        if (clauseWords.length >= 2) {
           remaining = clauseMatch[3];
           if (chunk.length > 0) chunks.push(chunk);
           continue;
@@ -108,19 +108,19 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
       }
     }
 
-    // 3. Early speculative dispatch: 5+ words, no punctuation yet
-    //    Send first 4 words immediately so TTS overlaps with LLM generating the rest
-    if (words.length >= 5) {
-      const chunk = words.slice(0, 4).join(' ');
-      remaining = words.slice(4).join(' ');
+    // 3. Early speculative dispatch: 4+ words, no punctuation yet
+    //    Send first 3 words immediately so TTS overlaps with LLM generating the rest
+    if (words.length >= 4) {
+      const chunk = words.slice(0, 3).join(' ');
+      remaining = words.slice(3).join(' ');
       chunks.push(chunk);
       continue;
     }
 
-    // 4. Hard fallback: 8+ words stuck without any boundary → split at 5
-    if (words.length >= 8) {
-      const chunk = words.slice(0, 5).join(' ');
-      remaining = words.slice(5).join(' ');
+    // 4. Hard fallback: 6+ words stuck without any boundary → split at 3
+    if (words.length >= 6) {
+      const chunk = words.slice(0, 3).join(' ');
+      remaining = words.slice(3).join(' ');
       chunks.push(chunk);
       continue;
     }
@@ -407,7 +407,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           })),
           language: optionsRef.current.language,
           personality: optionsRef.current.personality,
-          businessId: optionsRef.current.businessId,
+          businessId: optionsRef.current.businessId || optionsRef.current.businessContext?.business?.id,
+          businessContext: optionsRef.current.businessContext,
         }),
         signal: abortControllerRef.current.signal,
       });

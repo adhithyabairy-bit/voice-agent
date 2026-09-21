@@ -17,13 +17,14 @@ import { LanguageSelector } from '@/components/voice/language-selector';
 import { useVoiceAgent } from '@/hooks/useVoiceAgent';
 import { useAuth } from '@/lib/auth/auth-context';
 import { authFetch } from '@/lib/api/auth-fetch';
-import type { LanguageCode, AgentPersonality, Business, Agent } from '@/types';
+import type { LanguageCode, AgentPersonality, Business, Agent, BusinessContext } from '@/types';
 
 export default function AgentPage() {
   const { business: authBusiness, agent: authAgent } = useAuth();
 
   const [businessData, setBusinessData] = useState<Business | null>(authBusiness);
   const [agentData, setAgentData] = useState<Agent | null>(authAgent);
+  const [businessContext, setBusinessContext] = useState<BusinessContext | null>(null);
   const [language, setLanguage] = useState<LanguageCode>('te-IN');
   const [voice, setVoice] = useState('aditya');
   const [personality, setPersonality] = useState<AgentPersonality>('friendly');
@@ -38,6 +39,7 @@ export default function AgentPage() {
         const res = await authFetch('/api/business');
         if (res.ok) {
           const data = await res.json();
+          setBusinessContext(data);
           if (data.business) {
             setBusinessData(data.business);
           }
@@ -65,6 +67,7 @@ export default function AgentPage() {
     businessId: businessData?.id,
     businessName: bName,
     greeting: agentData?.greeting || undefined,
+    businessContext: businessContext || undefined,
   });
 
   const isCallActive = ['listening', 'processing', 'speaking', 'connecting'].includes(voiceAgent.callState);
