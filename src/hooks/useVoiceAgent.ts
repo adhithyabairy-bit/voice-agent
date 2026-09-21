@@ -68,8 +68,13 @@ interface BrowserSpeechRecognition {
 
 /**
  * Split streamed LLM buffer into speech-ready chunks for real-time TTS.
- * Prioritizes full sentences and natural clauses (commas, semicolons) after 3+ words
- * to slash first-audio latency while preserving fluent conversational rhythm.
+ *
+ * Strategy (fastest possible first-audio latency):
+ * 1. Full sentence boundary → always dispatch immediately
+ * 2. Comma/clause boundary → dispatch if chunk has 2+ words (catches "అలాగే అండి,")
+ * 3. Early speculative dispatch → after just 5 words with no punctuation, fire the
+ *    first 4 words immediately so TTS audio starts while LLM finishes the sentence
+ * 4. Hard fallback → 8+ word buffer, split at 5
  */
 function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: string } {
   const chunks: string[] = [];
@@ -81,33 +86,41 @@ function extractSpeechChunks(buffer: string): { chunks: string[]; remaining: str
     if (sentenceMatch) {
       const chunk = sentenceMatch[1].trim();
       remaining = sentenceMatch[3];
-      if (chunk.length > 0) {
-        chunks.push(chunk);
-      }
+      if (chunk.length > 0) chunks.push(chunk);
       continue;
     }
 
-    // 2. Natural clause boundary (, ; : —) if at least 4 words have accumulated
     const words = remaining.trim().split(/\s+/);
-    if (words.length >= 4) {
+
+    // 2. Clause boundary (, ; : —) — fire as soon as 2+ words before the comma
+    //    This catches openers like "అలాగే అండి," or "సరే అండి," immediately
+    if (words.length >= 2) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:—\u2013\u2014]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
         const clauseWords = chunk.split(/\s+/);
-        if (clauseWords.length >= 3) {
+        // Only dispatch if there's more text after the comma (not trailing comma at end)
+        if (clauseWords.length >= 2 && clauseMatch[3].trim().length > 0) {
           remaining = clauseMatch[3];
-          if (chunk.length > 0) {
-            chunks.push(chunk);
-          }
+          if (chunk.length > 0) chunks.push(chunk);
           continue;
         }
       }
     }
 
-    // 3. Prevent buffer buildup if 12+ words have accumulated without punctuation
-    if (words.length >= 12) {
-      const chunk = words.slice(0, 9).join(' ');
-      remaining = words.slice(9).join(' ');
+    // 3. Early speculative dispatch: 5+ words, no punctuation yet
+    //    Send first 4 words immediately so TTS overlaps with LLM generating the rest
+    if (words.length >= 5) {
+      const chunk = words.slice(0, 4).join(' ');
+      remaining = words.slice(4).join(' ');
+      chunks.push(chunk);
+      continue;
+    }
+
+    // 4. Hard fallback: 8+ words stuck without any boundary → split at 5
+    if (words.length >= 8) {
+      const chunk = words.slice(0, 5).join(' ');
+      remaining = words.slice(5).join(' ');
       chunks.push(chunk);
       continue;
     }
@@ -195,7 +208,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
     lastPlaybackEndTimeRef.current = Date.now();
 
-    // 350ms acoustic guard delay to allow speaker reverberation to silence
+    // 180ms acoustic guard delay to allow speaker reverberation to silence
     setTimeout(() => {
       if (!isActiveRef.current) return;
       if (playerRef.current?.isPlaying() || pendingTTSChunksRef.current > 0 || window.speechSynthesis?.speaking) {
@@ -216,7 +229,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
       vadRef.current?.resume();
       updateState('listening');
-    }, 350);
+    }, 180);
   }, [updateState]);
 
   const cleanup = useCallback(() => {
