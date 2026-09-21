@@ -48,8 +48,8 @@ export async function synthesizeSpeech(
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
       speaker: options?.speaker || 'aditya',
-      pace: options?.pace || 1.05,
-      temperature: options?.temperature ?? 0.4,
+      pace: options?.pace || 1.45,
+      temperature: options?.temperature ?? 0.25,
       speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),
   });
@@ -102,8 +102,8 @@ export async function synthesizeSpeechStream(
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
       speaker: options?.speaker || 'aditya',
-      pace: options?.pace || 1.05,
-      temperature: options?.temperature ?? 0.4,
+      pace: options?.pace || 1.45,
+      temperature: options?.temperature ?? 0.25,
       speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),
   });
