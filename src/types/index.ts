@@ -262,3 +262,12 @@ export interface DemoConfig {
   isDemo: boolean;
   reason?: string;
 }
+
+// Re-export production pipeline types
+export type {
+  VoiceTurn,
+  TTSChunk,
+  AudioQueueItem,
+  VADConfig,
+} from '@/lib/voice/types';
+

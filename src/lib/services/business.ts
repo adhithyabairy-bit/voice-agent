@@ -1,14 +1,20 @@
 // ============================================================
 // Business Service
 // Handles business data retrieval, multi-tenant resolution, and context building.
+// Implements server-side TTL caching (5 minutes) and O(1) DSA Map indexes
+// for high-frequency entity lookups (services, FAQs) during voice turns.
 // ============================================================
 
 import { supabaseAdmin, isSupabaseConfigured } from '@/lib/db/supabase';
 import type { Business, Agent, Service, FAQ, BusinessContext } from '@/types';
 
-// In-memory cache for business data (keyed by businessId or ownerId)
+// Server-side cache for business data (TTL default: 5 minutes)
+export const BUSINESS_CACHE_TTL = Number(process.env.BUSINESS_CACHE_TTL_MS || 5 * 60 * 1000);
 const contextCache = new Map<string, { context: BusinessContext; timestamp: number }>();
-const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+
+// O(1) Fast Lookup Cache for services and FAQs per business
+const serviceMapCache = new Map<string, Map<string, Service>>();
+const faqMapCache = new Map<string, Map<string, FAQ>>();
 
 // Generic fallback if Supabase is completely empty or offline
 const GENERIC_FALLBACK_BUSINESS: BusinessContext = {
@@ -60,9 +66,50 @@ const GENERIC_FALLBACK_BUSINESS: BusinessContext = {
 export function invalidateBusinessCache(key?: string) {
   if (key) {
     contextCache.delete(key);
+    serviceMapCache.delete(key);
+    faqMapCache.delete(key);
   } else {
     contextCache.clear();
+    serviceMapCache.clear();
+    faqMapCache.clear();
   }
+}
+
+/**
+ * Build O(1) indexed lookup maps for services and FAQs.
+ */
+function indexBusinessEntities(businessId: string, services: Service[], faqs: FAQ[]): void {
+  const sMap = new Map<string, Service>();
+  for (const s of services) {
+    if (s.name) {
+      sMap.set(s.name.trim().toLowerCase(), s);
+    }
+  }
+  serviceMapCache.set(businessId, sMap);
+
+  const fMap = new Map<string, FAQ>();
+  for (const f of faqs) {
+    if (f.question) {
+      fMap.set(f.question.trim().toLowerCase(), f);
+    }
+  }
+  faqMapCache.set(businessId, fMap);
+}
+
+/**
+ * O(1) average lookup for a business service by name.
+ */
+export function getServiceByName(businessId: string, name: string): Service | undefined {
+  const sMap = serviceMapCache.get(businessId);
+  return sMap?.get(name.trim().toLowerCase());
+}
+
+/**
+ * O(1) average lookup for a business FAQ by question.
+ */
+export function getFAQByQuestion(businessId: string, question: string): FAQ | undefined {
+  const fMap = faqMapCache.get(businessId);
+  return fMap?.get(question.trim().toLowerCase());
 }
 
 /**
@@ -76,7 +123,7 @@ export async function getBusinessInfo(
   const cacheKey = businessId || ownerId || 'default';
   const cached = contextCache.get(cacheKey);
 
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+  if (cached && Date.now() - cached.timestamp < BUSINESS_CACHE_TTL) {
     return cached.context;
   }
 
@@ -148,19 +195,25 @@ export async function getBusinessInfo(
         .order('created_at', { ascending: true }),
     ]);
 
+    const services = (servicesRes.data || []) as Service[];
+    const faqs = (faqsRes.data || []) as FAQ[];
+
     const context: BusinessContext = {
       business: {
         ...businessData,
         name: businessData.business_name || (businessData as any).name,
       },
       agent: agentRes.data ? (agentRes.data as Agent) : null,
-      services: (servicesRes.data || []) as Service[],
-      faqs: (faqsRes.data || []) as FAQ[],
+      services,
+      faqs,
     };
 
+    // Cache the context
     contextCache.set(cacheKey, { context, timestamp: Date.now() });
     if (resolvedBusinessId) {
       contextCache.set(resolvedBusinessId, { context, timestamp: Date.now() });
+      // Build O(1) indexed maps for services and FAQs
+      indexBusinessEntities(resolvedBusinessId, services, faqs);
     }
 
     return context;

@@ -6,6 +6,7 @@
 
 import { synthesizeSpeechStream, synthesizeSpeech, getCachedTTSAudio } from '@/lib/ai/sarvam-tts';
 import { isSarvamConfigured } from '@/lib/ai/sarvam-stt';
+import { normalizeForTTS } from '@/lib/voice/normalizer';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,8 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { text, language = 'te-IN', voice = 'aditya', pace = 1.15, temperature = 0.25 } = body;
 
-    if (!text) {
+    const cleanText = normalizeForTTS(text, language);
+    if (!cleanText) {
       return Response.json(
         { error: 'No text provided' },
         { status: 400 }
@@ -25,13 +27,13 @@ export async function POST(request: Request) {
     if (!isSarvamConfigured()) {
       return Response.json({
         mode: 'demo',
-        text,
+        text: cleanText,
         warning: 'SARVAM_API_KEY not configured. Use browser SpeechSynthesis as fallback.',
       });
     }
 
     // 0ms instant cached response for frequent conversational phrases
-    const cachedAudio = getCachedTTSAudio(text, language, { speaker: voice, pace });
+    const cachedAudio = getCachedTTSAudio(cleanText, language, { speaker: voice, pace });
     if (cachedAudio) {
       return new Response(cachedAudio, {
         headers: {
@@ -43,10 +45,10 @@ export async function POST(request: Request) {
     }
 
     // For short chunks (<= 6 words, e.g. openers), REST synthesis with caching is fastest
-    const wordCount = text.trim().split(/\s+/).length;
+    const wordCount = cleanText.trim().split(/\s+/).length;
     if (wordCount <= 6) {
       const startTime = Date.now();
-      const audioData = await synthesizeSpeech(text, language, {
+      const audioData = await synthesizeSpeech(cleanText, language, {
         speaker: voice,
         pace,
         temperature,
@@ -63,7 +65,7 @@ export async function POST(request: Request) {
 
     // Ultra-low latency streaming TTS from Sarvam for longer sentences
     try {
-      const stream = await synthesizeSpeechStream(text, language, {
+      const stream = await synthesizeSpeechStream(cleanText, language, {
         speaker: voice,
         pace,
         temperature,
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
     } catch (streamErr) {
       console.warn('Sarvam stream TTS failed, falling back to REST:', streamErr);
       const startTime = Date.now();
-      const audioData = await synthesizeSpeech(text, language, {
+      const audioData = await synthesizeSpeech(cleanText, language, {
         speaker: voice,
         pace,
         temperature,

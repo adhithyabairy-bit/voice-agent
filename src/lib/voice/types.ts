@@ -182,3 +182,39 @@ export type RealtimeServerMessage =
       code: string;
       message: string;
     };
+
+// ============================================================
+// Production Typed Voice Pipeline Entities (Part 33)
+// ============================================================
+
+export interface VoiceTurn {
+  turnId: string;
+  userTranscript: string;
+  assistantResponse: string;
+  language: LanguageCode;
+  metrics: TurnLatencyMetrics;
+  timestamp: number;
+}
+
+export interface TTSChunk {
+  chunkIndex: number;
+  text: string;
+  audioData?: ArrayBuffer;
+  isFirst: boolean;
+  timestamp: number;
+}
+
+export interface AudioQueueItem {
+  chunkIndex: number;
+  audioBuffer: AudioBuffer;
+  duration: number;
+  enqueuedAt: number;
+}
+
+export interface VADConfig {
+  silenceThreshold: number;
+  minSpeechDurationMs: number;
+  endSilenceMs: number;
+  maxTurnDurationMs: number;
+  preSpeechBufferMs: number;
+}

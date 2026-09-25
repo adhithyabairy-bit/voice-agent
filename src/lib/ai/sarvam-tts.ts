@@ -3,7 +3,13 @@
 // Uses Sarvam's bulbul:v3 model for Indian language TTS.
 // REST endpoint: POST https://api.sarvam.ai/text-to-speech
 // Streaming endpoint: POST https://api.sarvam.ai/text-to-speech/stream
+// Features:
+// - O(1) LRU Audio Cache with normalized Unicode keys
+// - Automatic pre-TTS normalization (removes markdown, emoji, junk)
+// - Configurable speaker and speech pace
 // ============================================================
+
+import { normalizeForTTS } from '@/lib/voice/normalizer';
 
 const SARVAM_TTS_URL = 'https://api.sarvam.ai/text-to-speech';
 const SARVAM_TTS_STREAM_URL = 'https://api.sarvam.ai/text-to-speech/stream';
@@ -15,6 +21,10 @@ export interface TTSOptions {
   temperature?: number;
   speech_sample_rate?: number;
 }
+
+// Default voice settings
+const DEFAULT_SPEAKER = process.env.SARVAM_TTS_SPEAKER || 'aditya';
+const DEFAULT_PACE = Number(process.env.SARVAM_TTS_PACE || 1.15);
 
 // ============================================================
 // DSA LRU Audio Cache with Key Normalization
@@ -54,17 +64,21 @@ class LRUAudioCache {
   has(key: string): boolean {
     return this.cache.has(key);
   }
+
+  clear(): void {
+    this.cache.clear();
+  }
 }
 
 export const ttsAudioCache = new LRUAudioCache(250);
 
 function normalizeCacheKey(text: string, languageCode: string, speaker: string, pace: number): string {
-  const cleanText = text
+  const normalized = normalizeForTTS(text, languageCode)
     .normalize('NFC')
     .trim()
     .replace(/\s+/g, ' ')
     .replace(/[.?!,;:]+$/, '');
-  return `${languageCode}:${speaker}:${pace.toFixed(2)}:${cleanText}`;
+  return `${languageCode}:${speaker}:${pace.toFixed(2)}:${normalized}`;
 }
 
 export function getCachedTTSAudio(
@@ -72,8 +86,8 @@ export function getCachedTTSAudio(
   languageCode: string,
   options?: TTSOptions
 ): ArrayBuffer | null {
-  const speaker = options?.speaker || 'aditya';
-  const pace = options?.pace ?? 1.15;
+  const speaker = options?.speaker || DEFAULT_SPEAKER;
+  const pace = options?.pace ?? DEFAULT_PACE;
   const cacheKey = normalizeCacheKey(text, languageCode, speaker, pace);
   const cached = ttsAudioCache.get(cacheKey);
   return cached ? cached.slice(0) : null;
@@ -97,9 +111,14 @@ export async function synthesizeSpeech(
     throw new Error('SARVAM_API_KEY is not configured');
   }
 
-  const speaker = options?.speaker || 'aditya';
-  const pace = options?.pace ?? 1.15;
-  const cacheKey = normalizeCacheKey(text, languageCode, speaker, pace);
+  const cleanText = normalizeForTTS(text, languageCode);
+  if (!cleanText) {
+    throw new Error('Text is empty after normalization');
+  }
+
+  const speaker = options?.speaker || DEFAULT_SPEAKER;
+  const pace = options?.pace ?? DEFAULT_PACE;
+  const cacheKey = normalizeCacheKey(cleanText, languageCode, speaker, pace);
 
   const cached = ttsAudioCache.get(cacheKey);
   if (cached) {
@@ -107,7 +126,7 @@ export async function synthesizeSpeech(
   }
 
   // Truncate text to stay within API limits
-  const truncatedText = text.slice(0, 2500);
+  const truncatedText = cleanText.slice(0, 2500);
 
   const response = await fetch(SARVAM_TTS_URL, {
     method: 'POST',
@@ -119,8 +138,8 @@ export async function synthesizeSpeech(
       text: truncatedText,
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
-      speaker: options?.speaker || 'aditya',
-      pace: options?.pace || 1.45,
+      speaker,
+      pace,
       temperature: options?.temperature ?? 0.25,
       speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),
@@ -162,7 +181,14 @@ export async function synthesizeSpeechStream(
     throw new Error('SARVAM_API_KEY is not configured');
   }
 
-  const truncatedText = text.slice(0, 2500);
+  const cleanText = normalizeForTTS(text, languageCode);
+  if (!cleanText) {
+    throw new Error('Text is empty after normalization');
+  }
+
+  const speaker = options?.speaker || DEFAULT_SPEAKER;
+  const pace = options?.pace ?? DEFAULT_PACE;
+  const truncatedText = cleanText.slice(0, 2500);
 
   const response = await fetch(SARVAM_TTS_STREAM_URL, {
     method: 'POST',
@@ -174,8 +200,8 @@ export async function synthesizeSpeechStream(
       text: truncatedText,
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
-      speaker: options?.speaker || 'aditya',
-      pace: options?.pace ?? 1.15,
+      speaker,
+      pace,
       temperature: options?.temperature ?? 0.25,
       speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),

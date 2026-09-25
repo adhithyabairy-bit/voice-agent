@@ -9,6 +9,7 @@ import { AudioRecorder } from './audio-recorder';
 import { TurnLatencyTracker } from './latency';
 import { extractStreamingSpeechChunks } from './llm';
 import { StreamingTTSClient } from './tts';
+import { normalizeForTTS } from './normalizer';
 import type { StreamingAudioPlayerInterface, TurnLatencyMetrics, VoiceSessionContext } from './types';
 import type { LanguageCode, AgentPersonality, BusinessContext } from '@/types';
 
@@ -227,6 +228,9 @@ export class LegacyVoiceEngine {
   }
 
   private dispatchTtsChunk(textChunk: string, chunkIndex: number): void {
+    const cleanText = normalizeForTTS(textChunk, this.options.language);
+    if (!cleanText) return;
+
     const isFirst = chunkIndex === 0;
     if (isFirst) {
       this.currentTurnTracker?.recordTtsStart();
@@ -236,7 +240,7 @@ export class LegacyVoiceEngine {
 
     this.ttsClient
       .synthesizeChunk({
-        text: textChunk,
+        text: cleanText,
         chunkIndex,
         language: this.options.language,
         voice: this.options.voice,
