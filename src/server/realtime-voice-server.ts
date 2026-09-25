@@ -305,13 +305,19 @@ Optimize for natural conversational turn-taking.`;
     ];
 
     try {
+      const isReasoning =
+        VOICE_LLM_MODEL.includes('qwen') ||
+        VOICE_LLM_MODEL.includes('gpt-oss') ||
+        VOICE_LLM_MODEL.includes('deepseek');
+
       const stream = await groq.chat.completions.create({
         model: VOICE_LLM_MODEL,
         messages,
         stream: true,
         temperature: 0.6,
-        max_tokens: 80,
-      });
+        max_tokens: 150,
+        ...(isReasoning ? { reasoning_effort: 'none' } : {}),
+      } as any);
 
       for await (const chunk of stream) {
         if (signal.aborted || sess.activeTurnId !== turnId) break;

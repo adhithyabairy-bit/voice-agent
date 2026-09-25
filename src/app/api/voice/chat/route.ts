@@ -103,10 +103,15 @@ export async function POST(request: Request) {
     const systemPrompt = buildVoiceSystemPrompt(businessContext, language, personality);
 
     // Build message array with sliding window (last 10 messages)
-    const recentHistory = conversationHistory.slice(-10);
+    // Filter out empty messages and any duplicate of the current message
+    const validHistory = (conversationHistory || [])
+      .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+      .filter((m, idx, arr) => !(idx === arr.length - 1 && m.role === 'user' && m.content.trim() === message.trim()))
+      .slice(-10);
+
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
-      ...recentHistory,
+      ...validHistory,
       { role: 'user', content: message },
     ];
 
@@ -119,7 +124,7 @@ export async function POST(request: Request) {
           let firstChunk = true;
           for await (const chunk of streamChatResponse(messages, {
             temperature: 0.6,
-            maxTokens: 80,
+            maxTokens: 150,
           })) {
             // Send timing info with first chunk (measured from true request start)
             if (firstChunk) {

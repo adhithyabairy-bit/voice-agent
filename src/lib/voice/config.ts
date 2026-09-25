@@ -12,14 +12,14 @@ export const VOICE_CONFIG = {
   },
 
   // Listening & Echo Guard (Section 5)
-  echoGuardMs: Number(process.env.VOICE_ECHO_GUARD_MS || 60), // Target ~60ms
+  echoGuardMs: Number(process.env.VOICE_ECHO_GUARD_MS || 120), // 120ms default for speaker decay; 60ms with headphones
 
   // LLM Model Config (Section 9)
   llm: {
     model: process.env.VOICE_LLM_MODEL || 'qwen/qwen3.8-27b',
     fallbackModel: 'openai/gpt-oss-120b',
     temperature: 0.6,
-    maxTokens: 80,
+    maxTokens: 150,
   },
 
   // Audio Capture (Section 6)

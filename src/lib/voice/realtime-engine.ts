@@ -20,6 +20,7 @@ export interface RealtimeEngineOptions {
   onFinalTranscript?: (transcript: string) => void;
   onToken?: (token: string) => void;
   onTurnComplete?: (fullResponse: string) => void;
+  onPlaybackComplete?: () => void;
   onLatencyUpdate?: (metrics: TurnLatencyMetrics) => void;
   onError?: (err: Error) => void;
 }
@@ -30,10 +31,18 @@ export class RealtimeVoiceEngine {
   private currentTurnTracker: TurnLatencyTracker | null = null;
   private activeTurnId = '';
   private isConnected = false;
+  private isTurnServerComplete = false;
 
   constructor(options: RealtimeEngineOptions) {
     this.options = options;
     this.client = new RealtimeVoiceClient();
+
+    this.options.player.onQueueDrained(() => {
+      if (this.isTurnServerComplete && !this.options.player.isPlaying()) {
+        this.isTurnServerComplete = false;
+        this.options.onPlaybackComplete?.();
+      }
+    });
   }
 
   async initialize(): Promise<void> {
@@ -75,6 +84,11 @@ export class RealtimeVoiceEngine {
             this.options.onLatencyUpdate?.(metrics);
           }
           this.options.onTurnComplete?.(fullResponse);
+          this.isTurnServerComplete = true;
+          if (!this.options.player.isPlaying()) {
+            this.isTurnServerComplete = false;
+            this.options.onPlaybackComplete?.();
+          }
         }
       },
       onTurnCancelled: (turnId) => {
@@ -110,6 +124,7 @@ export class RealtimeVoiceEngine {
 
   startTurn(turnId: string): void {
     this.activeTurnId = turnId;
+    this.isTurnServerComplete = false;
     this.currentTurnTracker = new TurnLatencyTracker(turnId);
     this.currentTurnTracker.recordSpeechStart();
     this.client.sendSpeechStart(turnId);
@@ -138,6 +153,7 @@ export class RealtimeVoiceEngine {
   }
 
   interrupt(): void {
+    this.isTurnServerComplete = false;
     if (this.activeTurnId) {
       this.client.sendInterrupt(this.activeTurnId);
       this.options.player.stopAudio();

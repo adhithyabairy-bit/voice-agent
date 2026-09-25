@@ -158,6 +158,8 @@ export class VoiceActivityDetector {
 
   pause(): void {
     this.active = false;
+    this.isSpeaking = false;
+    this.silenceStartTime = 0;
     if (this.animationFrame) {
       cancelAnimationFrame(this.animationFrame);
       this.animationFrame = null;
@@ -167,6 +169,7 @@ export class VoiceActivityDetector {
   resume(): void {
     if (!this.active) {
       this.active = true;
+      this.isSpeaking = false;
       this.silenceStartTime = 0;
       this.analyze();
     }

@@ -18,7 +18,7 @@ export class StreamingAudioPlayer implements StreamingAudioPlayerInterface {
   // Queue & sequence management
   private queue: AudioBuffer[] = [];
   private nextScheduledTime = 0;
-  private onQueueDrainedCallback: (() => void) | null = null;
+  private queueDrainedCallbacks: Set<() => void> = new Set();
   private onAudioStartCallback: (() => void) | null = null;
   private expectedChunkIndex = 0;
   private pendingIndexedChunks = new Map<number, AudioBuffer>();
@@ -111,7 +111,11 @@ export class StreamingAudioPlayer implements StreamingAudioPlayerInterface {
   }
 
   onQueueDrained(callback: () => void): void {
-    this.onQueueDrainedCallback = callback;
+    this.queueDrainedCallbacks.add(callback);
+  }
+
+  removeQueueDrained(callback: () => void): void {
+    this.queueDrainedCallbacks.delete(callback);
   }
 
   private schedulePlayback(): void {
@@ -155,10 +159,12 @@ export class StreamingAudioPlayer implements StreamingAudioPlayerInterface {
         ) {
           this.playing = false;
           this.nextScheduledTime = 0;
-          if (this.onQueueDrainedCallback) {
-            const cb = this.onQueueDrainedCallback;
-            this.onQueueDrainedCallback = null;
-            cb();
+          for (const cb of this.queueDrainedCallbacks) {
+            try {
+              cb();
+            } catch (drainErr) {
+              console.warn('Queue drain callback error:', drainErr);
+            }
           }
         }
       };
@@ -219,7 +225,6 @@ export class StreamingAudioPlayer implements StreamingAudioPlayerInterface {
     this.nextScheduledTime = 0;
     this.playing = false;
     this.hasReportedFirstAudioInTurn = false;
-    this.onQueueDrainedCallback = null;
   }
 
   isPlaying(): boolean {
@@ -236,6 +241,7 @@ export class StreamingAudioPlayer implements StreamingAudioPlayerInterface {
   }
 
   destroy(): void {
+    this.queueDrainedCallbacks.clear();
     this.stopAudio();
     if (this.audioContext) {
       this.audioContext.close();

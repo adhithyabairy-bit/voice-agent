@@ -156,11 +156,14 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
     lastPlaybackEndTimeRef.current = Date.now();
 
-    // 60ms acoustic guard delay allows speaker sound pressure to clear mic diaphragm
     setTimeout(() => {
       if (!isActiveRef.current) return;
-      if (playerRef.current?.isPlaying() || window.speechSynthesis?.speaking) {
-        return; // Audio still playing
+      if (
+        playerRef.current?.isPlaying() ||
+        legacyEngineRef.current?.hasPendingChunks() ||
+        window.speechSynthesis?.speaking
+      ) {
+        return; // Audio still playing or pending
       }
 
       isAISpeakingRef.current = false;
@@ -280,7 +283,6 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         }
       });
 
-      player.onQueueDrained(transitionToListening);
 
       // 2. Preload & cache hot business session context (Section 15 & 17)
       if (optionsRef.current.businessContext) {
@@ -319,9 +321,15 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           messagesRef.current.push(assistantMsg);
           setMessages([...messagesRef.current]);
           optionsRef.current.onTranscript?.(transcript, 'user');
+          isAISpeakingRef.current = true;
+          vadRef.current?.pause();
           updateState('speaking');
         },
         onToken: (token) => {
+          const lastIdx = messagesRef.current.length - 1;
+          if (lastIdx >= 0 && messagesRef.current[lastIdx].role === 'assistant') {
+            messagesRef.current[lastIdx].content += token;
+          }
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -341,6 +349,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           }
           optionsRef.current.onTranscript?.(fullResponse, 'assistant');
         },
+        onPlaybackComplete: transitionToListening,
         onLatencyUpdate: handleTurnLatencyUpdate,
         onError: (err) => {
           console.warn('Realtime engine warning, switching to fallback:', err.message);
@@ -356,6 +365,13 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
         sessionContext: hotContextRef.current || undefined,
         player,
         recorder,
+        getHistory: () => {
+          const all = messagesRef.current;
+          const past = all.slice(0, Math.max(0, all.length - 2));
+          return past
+            .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+            .map((m) => ({ role: m.role, content: m.content }));
+        },
         onPartialTranscript: (transcript) => setLiveTranscript(transcript),
         onFinalTranscript: (transcript) => {
           setLiveTranscript(transcript);
@@ -365,9 +381,15 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           messagesRef.current.push(assistantMsg);
           setMessages([...messagesRef.current]);
           optionsRef.current.onTranscript?.(transcript, 'user');
+          isAISpeakingRef.current = true;
+          vadRef.current?.pause();
           updateState('speaking');
         },
         onToken: (token) => {
+          const lastIdx = messagesRef.current.length - 1;
+          if (lastIdx >= 0 && messagesRef.current[lastIdx].role === 'assistant') {
+            messagesRef.current[lastIdx].content += token;
+          }
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -387,6 +409,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           }
           optionsRef.current.onTranscript?.(fullResponse, 'assistant');
         },
+        onPlaybackComplete: transitionToListening,
         onLatencyUpdate: handleTurnLatencyUpdate,
         onError: (err) => {
           console.error('Legacy engine error:', err.message);
@@ -428,7 +451,12 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
             lastPlaybackEndTimeRef.current > 0 &&
             Date.now() - lastPlaybackEndTimeRef.current < VOICE_CONFIG.echoGuardMs;
 
-          // Barge-in: user spoke while audio was outputting
+          // Ignore background noise or room reverberation while assistant is generating/speaking
+          if (isAISpeakingRef.current && !isAudioPlaying) {
+            return;
+          }
+
+          // Barge-in: user spoke while audio was actively outputting
           if (isAudioPlaying) {
             interrupt();
           } else if (isEchoDecay) {
@@ -464,6 +492,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
 
           const turnId = turnCoordinatorRef.current.getActiveTurnId();
           if (!turnId) return;
+
+          isAISpeakingRef.current = true;
+          vadRef.current?.pause();
 
           if (realtimeEngineRef.current?.isReady()) {
             realtimeEngineRef.current.endTurn(turnId);
@@ -578,7 +609,9 @@ export function useVoiceAgent(options: VoiceAgentOptions): VoiceAgentReturn {
           body: JSON.stringify({
             callId: conversationId,
             businessId: optionsRef.current.businessId,
-            messages: allMsgs.map((m) => ({ role: m.role, content: m.content })),
+            messages: allMsgs
+              .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+              .map((m) => ({ role: m.role, content: m.content })),
             language: optionsRef.current.language,
             startTime: callStartTimeRef.current,
           }),
