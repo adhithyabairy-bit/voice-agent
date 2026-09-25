@@ -17,9 +17,9 @@ export const VOICE_CONFIG = {
   // LLM Model Config (Section 9)
   llm: {
     model: process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile',
-    fallbackModel: 'openai/gpt-oss-20b',
+    fallbackModel: 'llama-3.1-8b-instant',
     temperature: 0.6,
-    maxTokens: 150,
+    maxTokens: 140,
   },
 
   // Audio Capture (Section 6)

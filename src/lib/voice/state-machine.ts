@@ -15,6 +15,7 @@ export interface CallerSlots {
   dayOfWeek: string | null;
   timeOfDay: string | null;
   appointmentConfirmed: boolean;
+  isSundayRequested: boolean;
   state: 'GREETING' | 'INQUIRY' | 'SCHEDULING' | 'CONFIRMED' | 'FAREWELL';
 }
 
@@ -71,6 +72,7 @@ export function extractCallerSlots(
     dayOfWeek: null,
     timeOfDay: null,
     appointmentConfirmed: false,
+    isSundayRequested: false,
     state: 'GREETING',
   };
 
@@ -78,6 +80,12 @@ export function extractCallerSlots(
   if (currentMessage) {
     allMessages.push({ role: 'user', content: currentMessage });
   }
+
+  // Calculate if tomorrow is Sunday in IST
+  const now = new Date();
+  const istDate = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  const dayIdx = istDate.getUTCDay();
+  const isTomorrowSunday = (dayIdx + 1) % 7 === 0;
 
   for (const msg of allMessages) {
     const text = msg.content || '';
@@ -115,6 +123,15 @@ export function extractCallerSlots(
           slots.dayOfWeek = day;
           break;
         }
+      }
+    }
+
+    // Check if Sunday or tomorrow (when tomorrow is Sunday) is requested in user message
+    if (msg.role === 'user') {
+      const isSundayWord = /(?:సండే|ఆదివారం|sunday)/i.test(text);
+      const isTomorrowWord = /(?:రేపు|tomorrow)/i.test(text);
+      if (isSundayWord || (isTomorrowWord && isTomorrowSunday)) {
+        slots.isSundayRequested = true;
       }
     }
 
@@ -175,7 +192,7 @@ export function isFarewell(message: string): boolean {
 /**
  * Fast-Path O(1) Instant Response Resolver:
  * When caller gives an acknowledgment after slot confirmation,
- * bypasses LLM (0ms) and returns a polite, natural Telugu receptionist response.
+ * returns a crisp, natural Telugu receptionist response without overusing "అండి".
  */
 export function resolveFastPathResponse(
   message: string,
@@ -188,15 +205,17 @@ export function resolveFastPathResponse(
   const isBye = isFarewell(message);
 
   if (slots.appointmentConfirmed) {
-    const namePart = slots.callerName ? `${slots.callerName} గారు` : 'అండి';
+    const nameGreeting = slots.callerName ? `${slots.callerName} గారు` : '';
 
     if (isBye) {
-      return `ధన్యవాదాలు ${namePart}, మంచి రోజు కావాలని కోరుకుంటున్నాం!`;
+      return nameGreeting
+        ? `ధన్యవాదాలు ${nameGreeting}, Have a great day!`
+        : `ధన్యవాదాలు, Have a great day!`;
     }
 
     if (isAck) {
-      // Natural Telugu follow-up without asking name or repeating appointment
-      return `సరే అండి, ${namePart}. ఇంకేమైనా వివరాలు కావాలా అండి?`;
+      // Natural Telugu follow-up without repetition or double "అండి"
+      return `సరే, ఇంకేమైనా వివరాలు కావాలా?`;
     }
   }
 
@@ -215,11 +234,17 @@ export function generateConversationDirectives(slots: CallerSlots): string {
   if (slots.callerName) {
     directives.push(
       `• CALLER NAME: "${slots.callerName} గారు" (ALREADY REGISTERED).`,
-      `  CRITICAL: NEVER ask "దయచేసి మీ పేరు చెప్పండి?" or ask for caller's name again! Address caller as "${slots.callerName} గారు".`
+      `  CRITICAL: NEVER ask "దయచేసి మీ పేరు చెప్పండి?" again!`,
+      `  DO NOT repeat their name in every turn — use it naturally and sparingly.`
     );
-  } else {
+  }
+
+  if (slots.isSundayRequested) {
     directives.push(
-      `• CALLER NAME: Not yet provided. You may politely ask for their name ONCE if booking an appointment.`
+      `• 🚨 SUNDAY / TOMORROW REQUEST DETECTED: Caller requested Sunday (or tomorrow, which is Sunday).`,
+      `  CRITICAL: You MUST tell the caller that our office is CLOSED on Sunday:`,
+      `  "క్షమించండి, రేపు ఆదివారం మా ఆఫీస్ సెలవు. సోమవారం 10 AM కి చూడమంటారా?"`,
+      `  STRICTLY FORBIDDEN to book or confirm a Sunday slot!`
     );
   }
 
@@ -227,12 +252,11 @@ export function generateConversationDirectives(slots: CallerSlots): string {
     directives.push(
       `• APPOINTMENT STATUS: ALREADY CONFIRMED AND BOOKED!`,
       `  CRITICAL: Do NOT re-book, do NOT ask for day/time again, and NEVER say "call back చెయ్యండి".`,
-      `  If caller acknowledges (e.g., says "ఓకే" or "సరే"), simply say: "సరే అండి! ఇంకేమైనా వివరాలు కావాలా?" or warmly wrap up the call.`
+      `  If caller acknowledges (e.g. "ఓకే" or "సరే"), simply say: "సరే, ఇంకేమైనా వివరాలు కావాలా?" or wish them a great day.`
     );
   } else if (slots.dayOfWeek || slots.timeOfDay) {
     directives.push(
-      `• SCHEDULING DETAILS: Requested day: "${slots.dayOfWeek || 'not set'}", time: "${slots.timeOfDay || 'not set'}".`,
-      `  Proceed to confirm the slot directly without asking redundant questions.`
+      `• SCHEDULING DETAILS: Requested day: "${slots.dayOfWeek || 'not set'}", time: "${slots.timeOfDay || 'not set'}".`
     );
   }
 

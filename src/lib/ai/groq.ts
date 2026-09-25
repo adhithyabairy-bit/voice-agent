@@ -26,14 +26,16 @@ export function isGroqConfigured(): boolean {
   return !!process.env.GROQ_API_KEY;
 }
 
-// Candidate models: llama-3.3-70b-versatile provides immediate ~200-300ms TTFT
-// without any reasoning/thinking delay, with native multilingual support for Indian languages.
+// Candidate models for ultra-low latency voice:
+// llama-3.3-70b-versatile: ~250-350ms TTFT, highest quality multilingual Indian language generation.
+// llama-3.1-8b-instant: ~100-150ms TTFT instant fallback, ZERO reasoning overhead, never hangs.
+// llama3-70b-8192: ~250-300ms fast fallback.
+// STRICTLY NO REASONING MODELS (e.g. gpt-oss, qwen, deepseek) — they produce <think> tokens causing 10s latency stalls.
 const CANDIDATE_MODELS = [
   process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile',
   'llama-3.3-70b-versatile',
-  'openai/gpt-oss-20b',
-  'qwen/qwen3.8-27b',
-  'openai/gpt-oss-120b',
+  'llama-3.1-8b-instant',
+  'llama3-70b-8192',
 ];
 
 /**
@@ -71,15 +73,16 @@ export async function* streamChatResponse(
         messages,
         stream: true,
         temperature: options?.temperature ?? 0.6,
-        max_tokens: options?.maxTokens ?? 150,
+        max_tokens: options?.maxTokens ?? 140,
       };
 
-      if (isReasoning) {
-        // Groq requires 'low', 'medium', or 'high' for reasoning_effort
-        params.reasoning_effort = 'low';
-      }
+      // Maximum 2000ms before falling back to next ultra-fast model
+      const createPromise = client.chat.completions.create(params);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout connecting to ${model} after 2000ms`)), 2000)
+      );
 
-      activeStream = await client.chat.completions.create(params);
+      activeStream = (await Promise.race([createPromise, timeoutPromise])) as any;
       console.log(`[Groq] Streaming started with model: ${model}`);
       break;
     } catch (err: any) {
