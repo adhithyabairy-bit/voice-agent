@@ -126,15 +126,6 @@ export function extractCallerSlots(
       }
     }
 
-    // Check if Sunday or tomorrow (when tomorrow is Sunday) is requested in user message
-    if (msg.role === 'user') {
-      const isSundayWord = /(?:సండే|ఆదివారం|sunday)/i.test(text);
-      const isTomorrowWord = /(?:రేపు|tomorrow)/i.test(text);
-      if (isSundayWord || (isTomorrowWord && isTomorrowSunday)) {
-        slots.isSundayRequested = true;
-      }
-    }
-
     // 4. Extract Time
     if (!slots.timeOfDay) {
       const timeMatch = text.match(TIME_REGEX);
@@ -151,6 +142,15 @@ export function extractCallerSlots(
           break;
         }
       }
+    }
+  }
+
+  // Check if Sunday or tomorrow (when tomorrow is Sunday) is requested ONLY IN THE CURRENT MESSAGE
+  if (currentMessage) {
+    const isSundayWord = /(?:సండే|ఆదివారం|sunday)/i.test(currentMessage);
+    const isTomorrowWord = /(?:రేపు|tomorrow)/i.test(currentMessage);
+    if (isSundayWord || (isTomorrowWord && isTomorrowSunday)) {
+      slots.isSundayRequested = true;
     }
   }
 
@@ -191,8 +191,8 @@ export function isFarewell(message: string): boolean {
 
 /**
  * Fast-Path O(1) Instant Response Resolver:
- * When caller gives an acknowledgment after slot confirmation,
- * returns a crisp, natural Telugu receptionist response without overusing "అండి".
+ * Resolves standard inquiries (services, greetings, acknowledgments) in 0ms LLM time
+ * to achieve sub-500ms TTFA.
  */
 export function resolveFastPathResponse(
   message: string,
@@ -201,9 +201,24 @@ export function resolveFastPathResponse(
 ): string | null {
   if (language !== 'te-IN') return null;
 
-  const isAck = isAcknowledgment(message);
-  const isBye = isFarewell(message);
+  const clean = message.trim();
+  const isAck = isAcknowledgment(clean);
+  const isBye = isFarewell(clean);
 
+  // 1. Common Services Inquiry -> Instant 0ms response
+  if (
+    /(?:ఎలాంటి|ఏమి|ఏం|what)\s*(?:సర్వీసెస్|services|సేవలు|ప్రొవైడ్|చేస్తారు)/i.test(clean) ||
+    /(?:services|సర్వీసెస్)\s*(?:ఏంటి|enti|please|list)/i.test(clean)
+  ) {
+    return 'మా దగ్గర విల్లాస్, ఫ్లాట్స్, అపార్ట్‌మెంట్స్ ఉన్నాయి. అలాగే ఫ్రీ సైట్ విజిట్ కూడా బుక్ చేస్తాం. మీకు ఏ ప్రాపర్టీ కావాలి?';
+  }
+
+  // 2. Greetings -> Instant 0ms response
+  if (/^(?:నమస్కారం|నమస్తే|హలో|హాయ్|hello|hi|hey)[\s.!?,]*$/i.test(clean)) {
+    return 'నమస్కారం! Adhi estate కి స్వాగతం, నేను మీకు ఎలా సహాయపడగలను?';
+  }
+
+  // 3. Post-confirmation turns
   if (slots.appointmentConfirmed) {
     const nameGreeting = slots.callerName ? `${slots.callerName} గారు` : '';
 
@@ -214,9 +229,13 @@ export function resolveFastPathResponse(
     }
 
     if (isAck) {
-      // Natural Telugu follow-up without repetition or double "అండి"
-      return `సరే, ఇంకేమైనా వివరాలు కావాలా?`;
+      return 'సరే, ఇంకేమైనా వివరాలు కావాలా?';
     }
+  }
+
+  // 4. Acknowledgment during inquiry when name is already captured
+  if (isAck && slots.callerName && !slots.appointmentConfirmed) {
+    return 'సరే, ఎప్పుడు సైట్ విజిట్ ప్లాన్ చేద్దాం?';
   }
 
   return null;

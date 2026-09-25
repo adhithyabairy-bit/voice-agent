@@ -6,7 +6,7 @@
 export const VOICE_CONFIG = {
   // Voice Activity Detection (Section 4)
   vad: {
-    hangoverTime: Number(process.env.VOICE_VAD_HANGOVER_MS || 200), // Target ~200ms
+    hangoverTime: Number(process.env.VOICE_VAD_HANGOVER_MS || 120), // Target ~120ms for crisp response
     minSpeechDuration: Number(process.env.VOICE_VAD_MIN_SPEECH_MS || 80), // Target ~80ms
     threshold: 0.007,
   },

@@ -25,6 +25,7 @@ const GREETING_OR_SHORT_PATTERNS = [
   // Name declarations & slot requests have direct business facts in prompt
   /^(నా పేరు|my name is|i am)\s+/i,
   /(?:బుక్ చెయ్యి|book చేయండి|స్లాట్|slot|రేపు|సండే|మండే|ఆదివారం|సోమవారం)/i,
+  /(?:సర్వీసెస్|services|సేవలు|విల్లా|villa|ప్లాట్|plot|ఫ్లాట్|flat)/i,
 ];
 
 export function shouldBypassRAG(query: string, context?: VoiceSessionContext): boolean {
