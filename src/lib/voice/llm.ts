@@ -56,8 +56,10 @@ export function shouldBypassRAG(query: string, context?: VoiceSessionContext): b
 }
 
 /**
- * Split streamed LLM tokens into speech-ready phrase chunks.
- * Speculatively dispatches 3-4 words early so TTS overlaps with LLM generation.
+ * Split streamed LLM tokens into natural, human speech chunks.
+ * Chunks by complete sentences (. ? ! । \n) or substantial clauses (, ; :)
+ * to prevent artificial robotic 3-word stops, preserving natural Indian-language prosody
+ * and keeping playback queue smooth without gaps.
  */
 export function extractStreamingSpeechChunks(buffer: string): {
   chunks: string[];
@@ -67,7 +69,7 @@ export function extractStreamingSpeechChunks(buffer: string): {
   let remaining = buffer;
 
   while (remaining.length > 0) {
-    // 1. Full sentence terminators (. ? ! । \n)
+    // 1. Full sentence boundary (. ? ! । \n) — primary natural chunking
     const sentenceMatch = remaining.match(/^([\s\S]*?[.?!।\n]+)(\s+|$)([\s\S]*)/);
     if (sentenceMatch) {
       const chunk = sentenceMatch[1].trim();
@@ -78,13 +80,14 @@ export function extractStreamingSpeechChunks(buffer: string): {
 
     const words = remaining.trim().split(/\s+/);
 
-    // 2. Clause boundary (, ; : —) with 2+ words before punctuation
-    if (words.length >= 2) {
+    // 2. Clause boundary (, ; : —) only if clause has at least 6 words
+    // to maintain natural melodic cadence and prevent premature stops
+    if (words.length >= 6) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:—\u2013\u2014]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
         const clauseWords = chunk.split(/\s+/);
-        if (clauseWords.length >= 2) {
+        if (clauseWords.length >= 5) {
           remaining = clauseMatch[3];
           if (chunk.length > 0) chunks.push(chunk);
           continue;
@@ -92,19 +95,10 @@ export function extractStreamingSpeechChunks(buffer: string): {
       }
     }
 
-    // 3. Early speculative dispatch: 4+ words without punctuation
-    // Send first 3 words to TTS immediately while LLM continues generating
-    if (words.length >= 4) {
-      const chunk = words.slice(0, 3).join(' ');
-      remaining = words.slice(3).join(' ');
-      chunks.push(chunk);
-      continue;
-    }
-
-    // 4. Hard fallback threshold: 6+ words -> flush 3
-    if (words.length >= 6) {
-      const chunk = words.slice(0, 3).join(' ');
-      remaining = words.slice(3).join(' ');
+    // 3. Fallback only for long sentences without punctuation (14+ words)
+    if (words.length >= 14) {
+      const chunk = words.slice(0, 10).join(' ');
+      remaining = words.slice(10).join(' ');
       chunks.push(chunk);
       continue;
     }

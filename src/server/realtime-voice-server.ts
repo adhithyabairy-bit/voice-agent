@@ -92,13 +92,13 @@ function extractSpeechPhrases(buffer: string): { phrases: string[]; remaining: s
 
     const words = remaining.trim().split(/\s+/);
 
-    // 2. Clause boundary (2+ words before comma)
-    if (words.length >= 2) {
+    // 2. Clause boundary (, ; : —) only if clause has at least 6 words
+    if (words.length >= 6) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:—\u2013\u2014]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const phrase = clauseMatch[1].trim();
         const clauseWords = phrase.split(/\s+/);
-        if (clauseWords.length >= 2) {
+        if (clauseWords.length >= 5) {
           remaining = clauseMatch[3];
           if (phrase.length > 0) phrases.push(phrase);
           continue;
@@ -106,18 +106,10 @@ function extractSpeechPhrases(buffer: string): { phrases: string[]; remaining: s
       }
     }
 
-    // 3. Early speculative flush on 4 words
-    if (words.length >= 4) {
-      const phrase = words.slice(0, 3).join(' ');
-      remaining = words.slice(3).join(' ');
-      phrases.push(phrase);
-      continue;
-    }
-
-    // 4. Fallback threshold
-    if (words.length >= 6) {
-      const phrase = words.slice(0, 3).join(' ');
-      remaining = words.slice(3).join(' ');
+    // 3. Fallback only for long sentences without punctuation (14+ words)
+    if (words.length >= 14) {
+      const phrase = words.slice(0, 10).join(' ');
+      remaining = words.slice(10).join(' ');
       phrases.push(phrase);
       continue;
     }
@@ -149,7 +141,7 @@ async function synthesizeTTSChunk(
         language_code: languageCode,
         model: 'bulbul:v3',
         speaker: voice || 'aditya',
-        pace: 1.45,
+        pace: 1.10,
         temperature: 0.25,
         speech_sample_rate: 24000,
       }),

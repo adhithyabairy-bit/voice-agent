@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { text, language = 'te-IN', voice = 'aditya', pace = 1.45, temperature = 0.25 } = body;
+    const { text, language = 'te-IN', voice = 'aditya', pace = 1.10, temperature = 0.25 } = body;
 
     if (!text) {
       return Response.json(

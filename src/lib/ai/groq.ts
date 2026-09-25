@@ -2,8 +2,8 @@ import Groq from 'groq-sdk';
 
 // ============================================================
 // Resilient Low-Latency Groq LLM Service
-// Supports automatic multi-model fallback, thinking suppression,
-// and zero-delay streaming chat completions.
+// Prioritizes immediate-turn low-latency conversational models
+// with zero reasoning delay and automatic fallback.
 // ============================================================
 
 let groqClient: Groq | null = null;
@@ -26,18 +26,26 @@ export function isGroqConfigured(): boolean {
   return !!process.env.GROQ_API_KEY;
 }
 
-// Ordered candidate models for ultra-low latency voice with fallback
+// Candidate models: llama-3.3-70b-versatile provides immediate ~200-300ms TTFT
+// without any reasoning/thinking delay, with native multilingual support for Indian languages.
 const CANDIDATE_MODELS = [
-  process.env.VOICE_LLM_MODEL,
-  'qwen/qwen3.8-27b',
-  'openai/gpt-oss-20b',
-  'openai/gpt-oss-120b',
+  process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile',
   'llama-3.3-70b-versatile',
-].filter(Boolean) as string[];
+  'openai/gpt-oss-20b',
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-120b',
+];
 
 /**
- * Stream a chat response from Groq with automatic model fallback and thinking suppression.
- * Returns an async iterable of text chunks.
+ * Deduplicate model list preserving priority
+ */
+function getPrioritizedModels(preferredModel?: string): string[] {
+  const list = preferredModel ? [preferredModel, ...CANDIDATE_MODELS] : CANDIDATE_MODELS;
+  return Array.from(new Set(list.filter(Boolean))) as string[];
+}
+
+/**
+ * Stream a chat response from Groq with immediate token delivery and automatic fallback.
  */
 export async function* streamChatResponse(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
@@ -48,10 +56,7 @@ export async function* streamChatResponse(
   }
 ): AsyncGenerator<string> {
   const client = getGroqClient();
-
-  const modelsToTry: string[] = options?.model
-    ? [options.model, ...CANDIDATE_MODELS.filter((m) => m !== options.model)]
-    : CANDIDATE_MODELS;
+  const modelsToTry = getPrioritizedModels(options?.model);
 
   let activeStream: any = null;
   let lastError: any = null;
@@ -59,7 +64,7 @@ export async function* streamChatResponse(
   for (const model of modelsToTry) {
     try {
       const isReasoning =
-        model.includes('qwen') || model.includes('gpt-oss') || model.includes('deepseek');
+        model.includes('gpt-oss') || model.includes('deepseek') || model.includes('qwen');
 
       const params: any = {
         model,
@@ -70,15 +75,15 @@ export async function* streamChatResponse(
       };
 
       if (isReasoning) {
-        // Disable thinking trace so the model starts speaking the final answer immediately
-        params.reasoning_effort = 'none';
+        // Groq requires 'low', 'medium', or 'high' for reasoning_effort
+        params.reasoning_effort = 'low';
       }
 
       activeStream = await client.chat.completions.create(params);
-      console.log(`[Groq] Streaming started successfully with model: ${model}`);
+      console.log(`[Groq] Streaming started with model: ${model}`);
       break;
     } catch (err: any) {
-      console.warn(`[Groq] Model ${model} failed, trying next fallback:`, err.message);
+      console.warn(`[Groq] Model ${model} failed, trying fallback:`, err.message);
       lastError = err;
     }
   }
@@ -121,7 +126,6 @@ export async function* streamChatResponse(
 
 /**
  * Get a complete (non-streaming) chat response from Groq with fallback.
- * Used for summaries and non-real-time operations.
  */
 export async function getChatResponse(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
@@ -132,17 +136,14 @@ export async function getChatResponse(
   }
 ): Promise<string> {
   const client = getGroqClient();
-
-  const modelsToTry: string[] = options?.model
-    ? [options.model, ...CANDIDATE_MODELS.filter((m) => m !== options.model)]
-    : CANDIDATE_MODELS;
+  const modelsToTry = getPrioritizedModels(options?.model);
 
   let lastError: any = null;
 
   for (const model of modelsToTry) {
     try {
       const isReasoning =
-        model.includes('qwen') || model.includes('gpt-oss') || model.includes('deepseek');
+        model.includes('gpt-oss') || model.includes('deepseek') || model.includes('qwen');
 
       const params: any = {
         model,
@@ -152,7 +153,7 @@ export async function getChatResponse(
       };
 
       if (isReasoning) {
-        params.reasoning_effort = 'none';
+        params.reasoning_effort = 'low';
       }
 
       const response = await client.chat.completions.create(params);
