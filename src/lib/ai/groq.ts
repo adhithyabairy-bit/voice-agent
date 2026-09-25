@@ -26,8 +26,9 @@ export function isGroqConfigured(): boolean {
   return !!process.env.GROQ_API_KEY;
 }
 
-// Known decommissioned Groq models that should NEVER be called
+// Known non-existent or decommissioned models that should NEVER be called
 const DECOMMISSIONED_MODELS = new Set([
+  'llama-3.1-8b-instant',
   'llama3-70b-8192',
   'llama3-8b-8192',
   'mixtral-8x7b-32768',
@@ -37,13 +38,13 @@ const DECOMMISSIONED_MODELS = new Set([
   'llama-3.2-90b-vision-preview',
 ]);
 
-// Valid active production models for low-latency voice on Groq:
-// 1. llama-3.3-70b-versatile: Flagship multilingual conversational model
-// 2. llama-3.1-8b-instant: Ultra-fast low-latency fallback (100-150ms TTFT)
+// Production conversational models on Groq:
+// Primary: llama-3.3-70b-versatile (proven reliable, no thinking tokens, high Telugu quality)
+// Fallback: openai/gpt-oss-20b (low reasoning effort)
 const CANDIDATE_MODELS = [
   process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile',
   'llama-3.3-70b-versatile',
-  'llama-3.1-8b-instant',
+  'openai/gpt-oss-20b',
 ];
 
 /**
@@ -75,6 +76,8 @@ export async function* streamChatResponse(
 
   for (const model of modelsToTry) {
     try {
+      const isReasoning = model.includes('gpt-oss');
+
       const params: any = {
         model,
         messages,
@@ -83,13 +86,11 @@ export async function* streamChatResponse(
         max_tokens: options?.maxTokens ?? 140,
       };
 
-      // 4500ms safe timeout per model to account for occasional cold start delays
-      const createPromise = client.chat.completions.create(params);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout connecting to ${model} after 4500ms`)), 4500)
-      );
+      if (isReasoning) {
+        params.reasoning_effort = 'low';
+      }
 
-      activeStream = (await Promise.race([createPromise, timeoutPromise])) as any;
+      activeStream = await client.chat.completions.create(params);
       console.log(`[Groq] Streaming started with model: ${model}`);
       break;
     } catch (err: any) {
