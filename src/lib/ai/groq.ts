@@ -26,24 +26,34 @@ export function isGroqConfigured(): boolean {
   return !!process.env.GROQ_API_KEY;
 }
 
-// Candidate models for ultra-low latency voice:
-// llama-3.3-70b-versatile: ~250-350ms TTFT, highest quality multilingual Indian language generation.
-// llama-3.1-8b-instant: ~100-150ms TTFT instant fallback, ZERO reasoning overhead, never hangs.
-// llama3-70b-8192: ~250-300ms fast fallback.
-// STRICTLY NO REASONING MODELS (e.g. gpt-oss, qwen, deepseek) — they produce <think> tokens causing 10s latency stalls.
+// Known decommissioned Groq models that should NEVER be called
+const DECOMMISSIONED_MODELS = new Set([
+  'llama3-70b-8192',
+  'llama3-8b-8192',
+  'mixtral-8x7b-32768',
+  'llama-3.2-1b-preview',
+  'llama-3.2-3b-preview',
+  'llama-3.2-11b-vision-preview',
+  'llama-3.2-90b-vision-preview',
+]);
+
+// Valid active production models for low-latency voice on Groq:
+// 1. llama-3.3-70b-versatile: Flagship multilingual conversational model
+// 2. llama-3.1-8b-instant: Ultra-fast low-latency fallback (100-150ms TTFT)
 const CANDIDATE_MODELS = [
   process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile',
   'llama-3.3-70b-versatile',
   'llama-3.1-8b-instant',
-  'llama3-70b-8192',
 ];
 
 /**
- * Deduplicate model list preserving priority
+ * Deduplicate model list preserving priority and filtering out decommissioned models
  */
 function getPrioritizedModels(preferredModel?: string): string[] {
   const list = preferredModel ? [preferredModel, ...CANDIDATE_MODELS] : CANDIDATE_MODELS;
-  return Array.from(new Set(list.filter(Boolean))) as string[];
+  return Array.from(new Set(list.filter(Boolean))).filter(
+    (model) => !DECOMMISSIONED_MODELS.has(model)
+  );
 }
 
 /**
@@ -65,9 +75,6 @@ export async function* streamChatResponse(
 
   for (const model of modelsToTry) {
     try {
-      const isReasoning =
-        model.includes('gpt-oss') || model.includes('deepseek') || model.includes('qwen');
-
       const params: any = {
         model,
         messages,
@@ -76,10 +83,10 @@ export async function* streamChatResponse(
         max_tokens: options?.maxTokens ?? 140,
       };
 
-      // Maximum 2000ms before falling back to next ultra-fast model
+      // 4500ms safe timeout per model to account for occasional cold start delays
       const createPromise = client.chat.completions.create(params);
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout connecting to ${model} after 2000ms`)), 2000)
+        setTimeout(() => reject(new Error(`Timeout connecting to ${model} after 4500ms`)), 4500)
       );
 
       activeStream = (await Promise.race([createPromise, timeoutPromise])) as any;
