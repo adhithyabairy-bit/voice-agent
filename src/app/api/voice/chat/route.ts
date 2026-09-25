@@ -9,6 +9,7 @@ import { getDemoResponse } from '@/lib/ai/demo';
 import { getBusinessInfo } from '@/lib/services/business';
 import { retrieveBusinessKnowledge } from '@/lib/ai/knowledge';
 import { buildVoiceSystemPrompt, shouldBypassRAG } from '@/lib/voice/llm';
+import { extractCallerSlots, resolveFastPathResponse, generateConversationDirectives } from '@/lib/voice/state-machine';
 import { getAuthSession } from '@/lib/auth/session';
 import type { LanguageCode, AgentPersonality, BusinessContext } from '@/types';
 
@@ -48,6 +49,52 @@ export async function POST(request: Request) {
         content: demoResponse,
         mode: 'demo',
         warning: 'GROQ_API_KEY not configured. Using demo mode.',
+      });
+    }
+
+    // Build message array with sliding window (last 10 messages)
+    const validHistory = (conversationHistory || [])
+      .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+      .filter((m, idx, arr) => !(idx === arr.length - 1 && m.role === 'user' && m.content.trim() === message.trim()))
+      .slice(-10);
+
+    // DSA Strategy 1: Finite State Machine & Slot Extraction
+    const callerSlots = extractCallerSlots(validHistory, message);
+
+    // DSA Strategy 2: O(1) Fast-Path Instant Response Resolver
+    // Bypasses 800ms LLM processing for standard post-confirmation acknowledgments
+    const fastPathResponse = resolveFastPathResponse(message, callerSlots, language);
+    const encoder = new TextEncoder();
+
+    if (fastPathResponse) {
+      const firstTokenLatency = Date.now() - requestStartTime;
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({ type: 'latency', firstTokenLatency }) + '\n'
+            )
+          );
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({ type: 'content', content: fastPathResponse }) + '\n'
+            )
+          );
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({ type: 'done', totalLatency: Date.now() - requestStartTime }) + '\n'
+            )
+          );
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Transfer-Encoding': 'chunked',
+        },
       });
     }
 
@@ -100,14 +147,10 @@ export async function POST(request: Request) {
     }
 
     // Build personalized system prompt with dynamic business context & RAG chunks
-    const systemPrompt = buildVoiceSystemPrompt(businessContext, language, personality);
-
-    // Build message array with sliding window (last 10 messages)
-    // Filter out empty messages and any duplicate of the current message
-    const validHistory = (conversationHistory || [])
-      .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
-      .filter((m, idx, arr) => !(idx === arr.length - 1 && m.role === 'user' && m.content.trim() === message.trim()))
-      .slice(-10);
+    const baseSystemPrompt = buildVoiceSystemPrompt(businessContext, language, personality);
+    // Inject deterministic conversation directives (name memory, appointment state)
+    const stateDirectives = generateConversationDirectives(callerSlots);
+    const systemPrompt = `${baseSystemPrompt}\n${stateDirectives}`;
 
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
@@ -116,15 +159,13 @@ export async function POST(request: Request) {
     ];
 
     // Stream the response
-    const encoder = new TextEncoder();
-
     const stream = new ReadableStream({
       async start(controller) {
         try {
           let firstChunk = true;
           for await (const chunk of streamChatResponse(messages, {
-            temperature: 0.6,
-            maxTokens: 150,
+            temperature: 0.5,
+            maxTokens: 140,
           })) {
             // Send timing info with first chunk (measured from true request start)
             if (firstChunk) {

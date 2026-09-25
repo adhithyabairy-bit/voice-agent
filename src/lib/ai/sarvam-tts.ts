@@ -16,15 +16,65 @@ export interface TTSOptions {
   speech_sample_rate?: number;
 }
 
-// In-memory audio buffer cache for instant 0ms responses on common phrases
-export const ttsAudioCache = new Map<string, ArrayBuffer>();
+// ============================================================
+// DSA LRU Audio Cache with Key Normalization
+// O(1) get & put with fixed capacity (capacity: 250 chunks)
+// Normalizes whitespace, punctuation, and Unicode combining forms
+// Ensures 0ms instant playback for repeated/common phrases
+// ============================================================
+
+class LRUAudioCache {
+  private capacity: number;
+  private cache = new Map<string, ArrayBuffer>();
+
+  constructor(capacity = 250) {
+    this.capacity = capacity;
+  }
+
+  get(key: string): ArrayBuffer | null {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    // Refresh recency
+    this.cache.delete(key);
+    this.cache.set(key, item);
+    return item;
+  }
+
+  set(key: string, value: ArrayBuffer): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.capacity) {
+      // Evict least recently used (first key in Map)
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+    this.cache.set(key, value);
+  }
+
+  has(key: string): boolean {
+    return this.cache.has(key);
+  }
+}
+
+export const ttsAudioCache = new LRUAudioCache(250);
+
+function normalizeCacheKey(text: string, languageCode: string, speaker: string, pace: number): string {
+  const cleanText = text
+    .normalize('NFC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[.?!,;:]+$/, '');
+  return `${languageCode}:${speaker}:${pace.toFixed(2)}:${cleanText}`;
+}
 
 export function getCachedTTSAudio(
   text: string,
   languageCode: string,
   options?: TTSOptions
 ): ArrayBuffer | null {
-  const cacheKey = `${languageCode}:${options?.speaker || 'aditya'}:${options?.pace || 1.45}:${text.trim()}`;
+  const speaker = options?.speaker || 'aditya';
+  const pace = options?.pace ?? 1.15;
+  const cacheKey = normalizeCacheKey(text, languageCode, speaker, pace);
   const cached = ttsAudioCache.get(cacheKey);
   return cached ? cached.slice(0) : null;
 }
@@ -47,7 +97,10 @@ export async function synthesizeSpeech(
     throw new Error('SARVAM_API_KEY is not configured');
   }
 
-  const cacheKey = `${languageCode}:${options?.speaker || 'aditya'}:${options?.pace || 1.45}:${text.trim()}`;
+  const speaker = options?.speaker || 'aditya';
+  const pace = options?.pace ?? 1.15;
+  const cacheKey = normalizeCacheKey(text, languageCode, speaker, pace);
+
   const cached = ttsAudioCache.get(cacheKey);
   if (cached) {
     return cached.slice(0);
@@ -122,7 +175,7 @@ export async function synthesizeSpeechStream(
       language_code: languageCode,
       model: options?.model || 'bulbul:v3',
       speaker: options?.speaker || 'aditya',
-      pace: options?.pace || 1.45,
+      pace: options?.pace ?? 1.15,
       temperature: options?.temperature ?? 0.25,
       speech_sample_rate: options?.speech_sample_rate ?? 24000,
     }),

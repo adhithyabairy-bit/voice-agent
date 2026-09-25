@@ -56,7 +56,7 @@ export class StreamingTTSClient {
           text,
           language,
           voice,
-          pace: 1.10,
+          pace: 1.15,
           temperature: 0.25,
         }),
         signal: controller.signal,

@@ -13,22 +13,25 @@ import { VOICE_CONFIG } from './config';
 import type { LanguageCode, AgentPersonality, BusinessContext } from '@/types';
 import type { VoiceSessionContext } from './types';
 
-// Common greetings and short utterances that NEVER require RAG retrieval
+// Common greetings, acknowledgments, and booking statements that NEVER require RAG retrieval
 const GREETING_OR_SHORT_PATTERNS = [
   /^(hello|hi|hey|halo|hlo|helo)[\s.!?,]*$/i,
-  /^(namaste|namaskaram|vanakkam|namaskar)[\s.!?,]*$/i,
-  /^(okay|ok|okk|okey|sure|alright|fine|cool)[\s.!?,]*$/i,
-  /^(thank you|thanks|dhanyavadalu|shukriya)[\s.!?,]*$/i,
-  /^(yes|yeah|yep|no|nope|nah|avunu|kadu|haan|nahi)[\s.!?,]*$/i,
-  /^(bye|goodbye|see you|tata)[\s.!?,]*$/i,
+  /^(namaste|namaskaram|vanakkam|namaskar|నమస్కారం)[\s.!?,]*$/i,
+  /^(okay|ok|okk|okey|sure|alright|fine|cool|ఓకే|సరే|సరేనా|అలాగే)[\s.!?,]*$/i,
+  /^(thank you|thanks|dhanyavadalu|shukriya|థాంక్స్|థాంక్యూ|ధన్యవాదాలు)[\s.!?,]*$/i,
+  /^(yes|yeah|yep|no|nope|nah|avunu|kadu|haan|nahi|హా|అవును|కాదు)[\s.!?,]*$/i,
+  /^(bye|goodbye|see you|tata|బై)[\s.!?,]*$/i,
   /^(who are you|meeru evaru|aap kaun hain)[\s.!?,]*$/i,
+  // Name declarations & slot requests have direct business facts in prompt
+  /^(నా పేరు|my name is|i am)\s+/i,
+  /(?:బుక్ చెయ్యి|book చేయండి|స్లాట్|slot|రేపు|సండే|మండే|ఆదివారం|సోమవారం)/i,
 ];
 
 export function shouldBypassRAG(query: string, context?: VoiceSessionContext): boolean {
   const clean = query.trim().toLowerCase();
 
   // 1. Very short utterance (< 3 words) or matches greeting/ack pattern
-  const wordCount = clean.split(/\s+/).length;
+  const wordCount = clean.split(/\s+/).filter(Boolean).length;
   if (wordCount <= 2) return true;
 
   for (const pattern of GREETING_OR_SHORT_PATTERNS) {
@@ -56,10 +59,11 @@ export function shouldBypassRAG(query: string, context?: VoiceSessionContext): b
 }
 
 /**
- * Split streamed LLM tokens into natural, human speech chunks.
- * Chunks by complete sentences (. ? ! । \n) or substantial clauses (, ; :)
- * to prevent artificial robotic 3-word stops, preserving natural Indian-language prosody
- * and keeping playback queue smooth without gaps.
+ * Split streamed LLM tokens into natural, human speech breath-groups.
+ * DSA Sliding Window with Prosodic Lookahead:
+ * - Prevents artificial robotic 3-word stops (e.g. "సరే అండి, ఆదిత్య గారు.")
+ * - Combines short openers (< 5 words) with the subsequent clause so playback is continuous and fluent
+ * - Emits on full sentence boundaries or natural breath clauses (5-18 words)
  */
 export function extractStreamingSpeechChunks(buffer: string): {
   chunks: string[];
@@ -69,25 +73,44 @@ export function extractStreamingSpeechChunks(buffer: string): {
   let remaining = buffer;
 
   while (remaining.length > 0) {
-    // 1. Full sentence boundary (. ? ! । \n) — primary natural chunking
+    // 1. Check for complete sentence boundary (. ? ! । \n)
     const sentenceMatch = remaining.match(/^([\s\S]*?[.?!।\n]+)(\s+|$)([\s\S]*)/);
     if (sentenceMatch) {
-      const chunk = sentenceMatch[1].trim();
-      remaining = sentenceMatch[3];
-      if (chunk.length > 0) chunks.push(chunk);
-      continue;
+      const candidate = sentenceMatch[1].trim();
+      const rest = sentenceMatch[3];
+      const wordCount = candidate.split(/\s+/).filter(Boolean).length;
+
+      // If candidate is very short (< 5 words, e.g. "సరే అండి, ఆదిత్య గారు.")
+      // AND there is more text following or currently streaming in rest,
+      // combine them into a single natural breath group to eliminate robotic pauses!
+      if (wordCount < 5 && rest.trim().length > 0) {
+        const nextSentenceMatch = rest.match(/^([\s\S]*?[.?!।\n]+)(\s+|$)([\s\S]*)/);
+        if (nextSentenceMatch) {
+          const combined = `${candidate} ${nextSentenceMatch[1].trim()}`.trim();
+          remaining = nextSentenceMatch[3];
+          chunks.push(combined);
+          continue;
+        } else {
+          // The rest of the thought is still streaming; hold candidate in buffer
+          break;
+        }
+      }
+
+      if (candidate.length > 0) {
+        chunks.push(candidate);
+        remaining = rest;
+        continue;
+      }
     }
 
-    const words = remaining.trim().split(/\s+/);
-
-    // 2. Clause boundary (, ; : —) only if clause has at least 6 words
-    // to maintain natural melodic cadence and prevent premature stops
-    if (words.length >= 6) {
+    // 2. Clause boundary (, ; : —) only if clause has at least 7 words
+    const words = remaining.trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 7) {
       const clauseMatch = remaining.match(/^([\s\S]*?[,;:—\u2013\u2014]+)(\s+|$)([\s\S]*)/);
       if (clauseMatch) {
         const chunk = clauseMatch[1].trim();
-        const clauseWords = chunk.split(/\s+/);
-        if (clauseWords.length >= 5) {
+        const clauseWords = chunk.split(/\s+/).filter(Boolean);
+        if (clauseWords.length >= 6) {
           remaining = clauseMatch[3];
           if (chunk.length > 0) chunks.push(chunk);
           continue;
@@ -95,10 +118,10 @@ export function extractStreamingSpeechChunks(buffer: string): {
       }
     }
 
-    // 3. Fallback only for long sentences without punctuation (14+ words)
-    if (words.length >= 14) {
-      const chunk = words.slice(0, 10).join(' ');
-      remaining = words.slice(10).join(' ');
+    // 3. Fallback for long run-on sentences without punctuation (16+ words)
+    if (words.length >= 16) {
+      const chunk = words.slice(0, 12).join(' ');
+      remaining = words.slice(12).join(' ');
       chunks.push(chunk);
       continue;
     }

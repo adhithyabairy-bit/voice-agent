@@ -35,7 +35,7 @@ loadEnv();
 const PORT = Number(process.env.REALTIME_PORT || 3001);
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SARVAM_API_KEY = process.env.SARVAM_API_KEY;
-const VOICE_LLM_MODEL = process.env.VOICE_LLM_MODEL || 'qwen/qwen3.8-27b';
+const VOICE_LLM_MODEL = process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile';
 
 if (!GROQ_API_KEY) {
   console.warn('⚠️ GROQ_API_KEY is not set in environment or .env.local');
