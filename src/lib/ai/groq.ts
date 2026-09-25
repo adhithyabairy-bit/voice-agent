@@ -40,12 +40,13 @@ export async function* streamChatResponse(
 ): AsyncGenerator<string> {
   const client = getGroqClient();
 
+  const defaultModel = process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile';
   const stream = await client.chat.completions.create({
-    model: options?.model || 'qwen/qwen3.8-27b',
+    model: options?.model || defaultModel,
     messages,
     stream: true,
-    temperature: options?.temperature ?? 0.7,
-    max_tokens: options?.maxTokens ?? 150,
+    temperature: options?.temperature ?? 0.6,
+    max_tokens: options?.maxTokens ?? 120,
   });
 
   for await (const chunk of stream) {
@@ -70,10 +71,11 @@ export async function getChatResponse(
 ): Promise<string> {
   const client = getGroqClient();
 
+  const defaultModel = process.env.VOICE_LLM_MODEL || 'llama-3.3-70b-versatile';
   const response = await client.chat.completions.create({
-    model: options?.model || 'qwen/qwen3.8-27b',
+    model: options?.model || defaultModel,
     messages,
-    temperature: options?.temperature ?? 0.7,
+    temperature: options?.temperature ?? 0.6,
     max_tokens: options?.maxTokens ?? 150,
   });
 

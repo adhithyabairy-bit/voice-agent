@@ -14,6 +14,7 @@ import { Waveform } from '@/components/voice/waveform';
 import { Transcript } from '@/components/voice/transcript';
 import { CallStatus } from '@/components/voice/call-status';
 import { LanguageSelector } from '@/components/voice/language-selector';
+import { LatencyPanel } from '@/components/voice/latency-panel';
 import { useVoiceAgent } from '@/hooks/useVoiceAgent';
 import { useAuth } from '@/lib/auth/auth-context';
 import { authFetch } from '@/lib/api/auth-fetch';
@@ -204,38 +205,13 @@ export default function AgentPage() {
             </div>
           </div>
 
-          {/* Latency metrics */}
-          {(voiceAgent.latency.sttLatency || voiceAgent.latency.llmFirstTokenLatency || voiceAgent.latency.ttsLatency) && (
-            <div className="glass-card p-5 space-y-3">
-              <label className="text-xs font-medium text-[var(--muted-foreground)]">Latency Metrics</label>
-              <div className="space-y-2 text-xs">
-                {voiceAgent.latency.sttLatency && (
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">STT</span>
-                    <span className="font-mono">{voiceAgent.latency.sttLatency}ms</span>
-                  </div>
-                )}
-                {voiceAgent.latency.llmFirstTokenLatency && (
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">LLM First Token</span>
-                    <span className="font-mono">{voiceAgent.latency.llmFirstTokenLatency}ms</span>
-                  </div>
-                )}
-                {voiceAgent.latency.ttsLatency && (
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">TTS</span>
-                    <span className="font-mono">{voiceAgent.latency.ttsLatency}ms</span>
-                  </div>
-                )}
-                {voiceAgent.latency.totalResponseLatency && (
-                  <div className="flex justify-between font-semibold border-t border-[var(--border)] pt-2 mt-2">
-                    <span>Total</span>
-                    <span className="font-mono">{voiceAgent.latency.totalResponseLatency}ms</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Voice Latency & Benchmark Telemetry Panel */}
+          <LatencyPanel
+            latestTurn={voiceAgent.latestTurnMetrics}
+            benchmarkStats={voiceAgent.benchmarkStats}
+            onResetBenchmark={voiceAgent.resetBenchmark}
+            activeEngine={voiceAgent.activeEngine}
+          />
         </div>
 
         {/* Right Panel — Live Voice Call Interface */}

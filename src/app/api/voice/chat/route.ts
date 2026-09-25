@@ -8,7 +8,7 @@ import { streamChatResponse, isGroqConfigured } from '@/lib/ai/groq';
 import { getDemoResponse } from '@/lib/ai/demo';
 import { getBusinessInfo } from '@/lib/services/business';
 import { retrieveBusinessKnowledge } from '@/lib/ai/knowledge';
-import { buildSystemPrompt } from '@/lib/ai/prompts';
+import { buildVoiceSystemPrompt, shouldBypassRAG } from '@/lib/voice/llm';
 import { getAuthSession } from '@/lib/auth/session';
 import type { LanguageCode, AgentPersonality, BusinessContext } from '@/types';
 
@@ -53,19 +53,22 @@ export async function POST(request: Request) {
 
     // Resolve business context — Fast path: use client-supplied context if available (0ms DB delay)
     let businessContext: BusinessContext;
+    const bypassRAG = shouldBypassRAG(message);
 
     if (clientBusinessContext?.business?.id) {
       businessContext = { ...clientBusinessContext };
-      // Retrieve semantic RAG knowledge chunks with strict 120ms race timeout
-      try {
-        const ragPromise = retrieveBusinessKnowledge(businessContext.business.id, message, 2);
-        const timeoutPromise = new Promise<string[]>((res) => setTimeout(() => res([]), 120));
-        const chunks = await Promise.race([ragPromise, timeoutPromise]);
-        if (chunks && chunks.length > 0) {
-          businessContext.knowledgeChunks = chunks;
+      if (!bypassRAG) {
+        // Retrieve semantic RAG knowledge chunks with strict 100ms race timeout
+        try {
+          const ragPromise = retrieveBusinessKnowledge(businessContext.business.id, message, 2);
+          const timeoutPromise = new Promise<string[]>((res) => setTimeout(() => res([]), 100));
+          const chunks = await Promise.race([ragPromise, timeoutPromise]);
+          if (chunks && chunks.length > 0) {
+            businessContext.knowledgeChunks = chunks;
+          }
+        } catch (ragErr) {
+          console.warn('RAG knowledge retrieval non-blocking error:', ragErr);
         }
-      } catch (ragErr) {
-        console.warn('RAG knowledge retrieval non-blocking error:', ragErr);
       }
     } else {
       // Fallback path: parallel fetch business info & RAG if businessId known
@@ -76,16 +79,20 @@ export async function POST(request: Request) {
       }
 
       if (resolvedBusinessId) {
-        const [bContext, chunks] = await Promise.all([
-          getBusinessInfo(resolvedBusinessId),
-          Promise.race([
-            retrieveBusinessKnowledge(resolvedBusinessId, message, 2),
-            new Promise<string[]>((res) => setTimeout(() => res([]), 140))
-          ]).catch(() => [] as string[]),
-        ]);
-        businessContext = bContext;
-        if (chunks && chunks.length > 0) {
-          businessContext.knowledgeChunks = chunks;
+        if (bypassRAG) {
+          businessContext = await getBusinessInfo(resolvedBusinessId);
+        } else {
+          const [bContext, chunks] = await Promise.all([
+            getBusinessInfo(resolvedBusinessId),
+            Promise.race([
+              retrieveBusinessKnowledge(resolvedBusinessId, message, 2),
+              new Promise<string[]>((res) => setTimeout(() => res([]), 100)),
+            ]).catch(() => [] as string[]),
+          ]);
+          businessContext = bContext;
+          if (chunks && chunks.length > 0) {
+            businessContext.knowledgeChunks = chunks;
+          }
         }
       } else {
         businessContext = await getBusinessInfo(resolvedBusinessId);
@@ -93,7 +100,7 @@ export async function POST(request: Request) {
     }
 
     // Build personalized system prompt with dynamic business context & RAG chunks
-    const systemPrompt = buildSystemPrompt(businessContext, language, personality);
+    const systemPrompt = buildVoiceSystemPrompt(businessContext, language, personality);
 
     // Build message array with sliding window (last 10 messages)
     const recentHistory = conversationHistory.slice(-10);
